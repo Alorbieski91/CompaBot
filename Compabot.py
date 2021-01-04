@@ -33,9 +33,10 @@ async def on_message(message):
 
 
 @bot.command(pass_context=True)
-async def test(ctx, *args):
+async def reply(ctx, *args):
+    user_args = ' '.join(args)
 
-    await ctx.channel.send(args)
+    await ctx.channel.send(user_args)
 
 @bot.event
 async def on_ready():
