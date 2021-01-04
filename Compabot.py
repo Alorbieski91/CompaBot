@@ -24,14 +24,18 @@ async def on_message(message):
         await message.channel.send('Hay nos vemos compa. Tallatelo')
     elif message.content.lower() == 'it is hot today':
         await message.channel.send('Eres joto guey?!')
+    elif message.content.lower() == 'it is cold today':
+        await message.channel.send('Eres frio guey?!')
+    elif message.content.lower() == 'it is certain':
+        await message.channel.send('es cierto guey!')
 
     await bot.process_commands(message)
 
 
 @bot.command(pass_context=True)
-async def test(ctx, arg):
+async def test(ctx, *args):
 
-    await ctx.channel.send(arg)
+    await ctx.channel.send(args)
 
 @bot.event
 async def on_ready():
