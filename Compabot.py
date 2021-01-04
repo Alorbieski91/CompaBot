@@ -4,7 +4,7 @@ import os
 from discord.ext import commands
 from dotenv import load_dotenv
 
-
+# test
 load_dotenv()
 
 intents = discord.Intents.default()
