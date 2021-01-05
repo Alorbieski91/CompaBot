@@ -30,7 +30,7 @@ async def on_message(message):
         await message.channel.send('es cierto guey!')
     elif message.content.lower() == 'marco':
         await message.channel.send('polo!')
-    elif message.content.lower().startswith('what happened to regino')
+    elif message.content.lower().startswith('what happened to regino'):
         await message.channel.send('Valio verga...')
 
     await bot.process_commands(message)
