@@ -6,4 +6,4 @@ Discord Bot work in progress
 
 # Heroku commands
 ## scale workers up/down (1/0)
-`heroku ps:scale worker=1 -a compabot`
+`heroku ps:scale worker=1 -a compa-bot`
