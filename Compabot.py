@@ -40,6 +40,17 @@ async def say(ctx, *args):
 
     await ctx.channel.send(user_args)
 
+@bot.command(pass_context=True)
+async def rickroll(ctx):
+    url = 'https://www.youtube.com/watch?v=oHg5SJYRHA0'
+
+    author = ctx.message.author
+    voice_channel = author.voice_channel
+    vc = await client.join_voice_channel(voice_channel)
+
+    player = await vc.create_ytdl_player(url)
+    player.start()
+
 @bot.event
 async def on_ready():
     print('Logged in as {0} ({0.id})'.format(bot.user))
