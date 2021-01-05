@@ -2,6 +2,9 @@ import discord
 import os
 
 from discord.ext import commands
+from discord.utils import get
+from discord import FFmpegPCMAudio
+from youtube_dl import YoutubeDL
 from dotenv import load_dotenv
 
 # test 2
@@ -11,6 +14,7 @@ intents = discord.Intents.default()
 intents.members = True
 
 bot = commands.Bot(command_prefix='$', intents=intents)
+client = discord.Client()
 
 @bot.event
 async def on_message(message):
@@ -42,16 +46,22 @@ async def say(ctx, *args):
 
     await ctx.channel.send(user_args)
 
-@bot.command(pass_context=True)
+@bot.command(brief="Plays a single video, from a youtube URL")
 async def rickroll(ctx):
-    url = 'https://www.youtube.com/watch?v=oHg5SJYRHA0'
+    URL = 'https://www.youtube.com/watch?v=oHg5SJYRHA0'
+    YDL_OPTIONS = {'format': 'bestaudio', 'noplaylist':'True'}
+    FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+    voice = get(client.voice_clients, guild=ctx.guild)
 
-    author = ctx.message.author
-    voice_channel = author.voice_channel
-    vc = await client.join_voice_channel(voice_channel)
-
-    player = await vc.create_ytdl_player(url)
-    player.start()
+    if not voice.is_playing():
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_link, download=False)
+        # URL = info['formats'][0]['url']
+        voice.play(FFmpegPCMAudio(URL, **FFMPEG_OPTIONS))
+        voice.is_playing()
+    else:
+        await ctx.send("Already playing song")
+        return
 
 @bot.event
 async def on_ready():
