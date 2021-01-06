@@ -112,6 +112,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
 
 class Music(commands.Cog):
+
+    if not discord.opus.is_loaded():
+        discord.opus.load_opus('libopus.so')
+
     def __init__(self, bot):
         self.bot = bot
 
