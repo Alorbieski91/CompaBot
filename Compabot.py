@@ -35,7 +35,7 @@ ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 intents = discord.Intents.default()
 intents.members = True
 
-bot = commands.Bot(command_prefix=commands.when_mentioned_or("$"),
+bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"),
                    description='Relatively simple music bot example',
                    intents=intents)
 
@@ -81,7 +81,7 @@ async def rickroll(ctx):
     player.start()
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
+    def __init__(self, source, *, data, volume=0.2):
         super().__init__(source, volume)
 
         self.data = data
@@ -165,7 +165,7 @@ class Music(commands.Cog):
     @stream.before_invoke
     async def ensure_voice(self, ctx):
         if ctx.voice_client is None:
-            if ctx.author.voice:
+            if ctx.author.voice_client:
                 await ctx.author.voice.channel.connect()
             else:
                 await ctx.send("You are not connected to a voice channel.")
