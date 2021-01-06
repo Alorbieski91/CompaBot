@@ -141,6 +141,9 @@ class Music(commands.Cog):
     async def yt(self, ctx, *, url):
         """Plays from a url (almost anything youtube_dl supports)"""
 
+        if ctx.voice_client is None:
+            return await ctx.voice_client.move_to(channel)
+
         async with ctx.typing():
             player = await YTDLSource.from_url(url, loop=self.bot.loop)
             ctx.voice_client.play(player, after=lambda e: print('Player error: %s' % e) if e else None)
@@ -150,6 +153,9 @@ class Music(commands.Cog):
     @commands.command()
     async def stream(self, ctx, *, url):
         """Streams from a url (same as yt, but doesn't predownload)"""
+
+        if ctx.voice_client is None:
+            return await ctx.voice_client.move_to(channel)
 
         async with ctx.typing():
             player = await YTDLSource.from_url(url, loop=self.bot.loop, stream=True)
