@@ -34,7 +34,7 @@ ytdlopts = {
 }
 
 ffmpegopts = {
-    'before_options': '-nostdin',
+    'before_options': '-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
 }
 
@@ -154,7 +154,7 @@ class MusicPlayer:
         self.next = asyncio.Event()
 
         self.np = None  # Now playing message
-        self.volume = .5
+        self.volume = .1
         self.current = None
 
         ctx.bot.loop.create_task(self.player_loop())
