@@ -53,7 +53,7 @@ async def on_message(message):
     if message.author.id == bot.user.id:
         return
 
-    if message.content.lower() == 'saludos':
+    if message.content.lower() == 'saludos' or message.content.lower() == 'hello':
         await message.channel.send('Saludos compa ALV!')
     elif message.content.lower() == 'bye':
         await message.channel.send('Hay nos vemos compa. Tallatelo')
@@ -70,6 +70,11 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+@bot.event
+async def on_member_join(member):
+    channel = member.guild.system_channel
+    if channel is not None:
+        await channel.send('Well, well, well... {0.mention} decided to show up...'.format(member))
 
 @bot.command(pass_context=True)
 async def say(ctx, *, arg):
