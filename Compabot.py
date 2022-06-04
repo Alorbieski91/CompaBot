@@ -21,19 +21,9 @@ async def on_message(message):
         return
 
     if message.content.lower() == 'saludos' or message.content.lower() == 'hello':
-        await message.channel.send('Saludos compa ALV!')
+        await message.channel.send('Saludos compa!')
     elif message.content.lower() == 'bye':
-        await message.channel.send('Hay nos vemos compa. Tallatelo')
-    elif message.content.lower() == 'it is hot today':
-        await message.channel.send('Eres joto guey?!')
-    elif message.content.lower() == 'it is cold today':
-        await message.channel.send('Eres frio guey?!')
-    elif message.content.lower() == 'it is certain':
-        await message.channel.send('es cierto guey!')
-    elif message.content.lower() == 'marco':
-        await message.channel.send('polo!')
-    elif message.content.lower().startswith('what happened to regino'):
-        await message.channel.send('Valio verga...')
+        await message.channel.send('Hay nos vemos compa.')
 
     await bot.process_commands(message)
 
