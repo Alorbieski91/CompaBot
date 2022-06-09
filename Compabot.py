@@ -23,7 +23,7 @@ async def on_message(message):
     if message.content.lower() == 'saludos' or message.content.lower() == 'hello':
         await message.channel.send('Saludos compa!')
     elif message.content.lower() == 'bye':
-        await message.channel.send('Hay nos vemos compa.')
+        await message.channel.send('Ahi nos vemos compa.')
 
     await bot.process_commands(message)
 
