@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 intents.members = True
 
 bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"),
