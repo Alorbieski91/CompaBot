@@ -5,3 +5,7 @@ Lib
 pyvenv.cfg
 /.vscode
 .python-version
+.venv/
+__pycache__/
+data/
+*.sqlite3
