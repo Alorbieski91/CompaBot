@@ -77,6 +77,35 @@ Only one start, stop, backup, or update runs at a time. Results are posted in th
 with the script's output. If a script takes longer than 14 minutes, Compabot says it is
 still running and lets it finish; use `/server status` to check on it.
 
+## Start automatically after restarts
+
+Windows Update restarts the PC often. To have Compabot start every time you sign in, and
+restart itself if it crashes or loses its connection, run this once in the Compabot folder
+from a normal (not administrator) PowerShell window:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-CompaBotStartup.ps1
+```
+
+This creates a Task Scheduler task named `CompaBot` that runs `Start-CompaBot.ps1` hidden,
+30 seconds after you sign in. Output goes to `logs\compabot.log` (the run before is kept as
+`logs\compabot.prev.log`). Use `.\Stop-CompaBot.ps1` to stop it, `Start-ScheduledTask CompaBot`
+to start it again, and `.\Install-CompaBotStartup.ps1 -Remove` to turn auto-start off.
+Don't also run `Compabot.py` by hand while the task is running.
+
+The task only runs once you are signed in, because `/server stop` needs the Icarus server's
+console window. For unattended restarts, have Windows sign in automatically:
+
+1. Download [Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon) from
+   Microsoft Sysinternals, run it, enter your Windows password, and click **Enable**. It stores
+   the password encrypted. Run it again and click **Disable** to undo.
+2. If you sign in with a PIN or fingerprint, first turn off **Settings > Accounts > Sign-in
+   options > For improved security, only allow Windows Hello sign-in**.
+3. Lock the PC (Windows key + L) rather than signing out when you walk away.
+
+Anyone with physical access to the PC will be able to use it after a restart, so only do
+this on a PC kept somewhere you trust.
+
 ## Storage and checks
 
 Quotes and favorites live in `data/compabot.sqlite3`, relative to the script, and survive
