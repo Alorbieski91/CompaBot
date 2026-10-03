@@ -1,0 +1,190 @@
+"""/server commands that run the Icarus PowerShell scripts on this Windows host."""
+import asyncio
+import base64
+import json
+import logging
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+import discord
+from discord import app_commands
+
+log = logging.getLogger('compabot.server')
+
+DEFAULT_SCRIPTS_DIR = r'C:\IcarusServer\scripts'
+SCRIPTS = {'start': 'Start-IcarusServer.ps1', 'stop': 'Stop-IcarusServer.ps1',
+           'backup': 'Backup-IcarusServer.ps1', 'update': 'Update-IcarusServer.ps1'}
+LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update'}
+# Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
+REPLY_WINDOW = 14 * 60
+STATUS_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+$p = Get-CimInstance Win32_Process -Filter "Name LIKE 'IcarusServer%'" |
+    Where-Object ExecutablePath -like "$($env:ICARUS_ROOT)*" | Sort-Object CreationDate | Select-Object -First 1
+if (-not $p) { '{"running":false}'; exit 0 }
+$port = [bool](Get-NetUDPEndpoint -LocalPort ([int]$env:ICARUS_PORT) -ErrorAction SilentlyContinue)
+[pscustomobject]@{ running = $true; port_open = $port
+    started = [DateTimeOffset]::new($p.CreationDate).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
+'''
+
+
+class ServerError(Exception):
+    pass
+
+
+def read_config(path):
+    """Read the simple key = value pairs from config.psd1."""
+    try:
+        text = Path(path).read_text(encoding='utf-8-sig')
+    except OSError:
+        return {}
+    return {k: v.strip("'\"") for k, v in re.findall(r"^\s*(\w+)\s*=\s*('[^']*'|\"[^\"]*\"|\d+)", text, re.M)}
+
+
+async def run_process(argv, env=None):
+    """Run a process to completion and return (exit code, combined output).
+
+    Output goes to a temp file rather than a pipe: Start-IcarusServer.ps1 launches the
+    game server, which would otherwise hold the pipe open and block us until it exits.
+    """
+    with tempfile.TemporaryFile() as out:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+            env={**os.environ, **(env or {})})
+        code = await proc.wait()
+        out.seek(0)
+        return code, out.read().decode('utf-8', 'replace')
+
+
+class ServerControl:
+    def __init__(self, admins, scripts_dir=DEFAULT_SCRIPTS_DIR, run=run_process):
+        self.admins = frozenset(admins)
+        self.scripts_dir = Path(scripts_dir)
+        config = read_config(self.scripts_dir / 'config.psd1')
+        self.install_root = Path(config.get('InstallRoot') or self.scripts_dir.parent)
+        self.name = config.get('ServerName', 'Icarus server')
+        self.port = config.get('GamePort', '17777')
+        self.run = run
+        self.windows = os.name == 'nt'
+        self.busy = None
+        self.reply_window = REPLY_WINDOW
+
+    def powershell(self, *args, env=None):
+        return self.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args], env)
+
+    async def run_action(self, action, *args):
+        """Run one script. Returns (exit code, output); exit code None means it is still running."""
+        script = self.scripts_dir / SCRIPTS[action]
+        if not script.is_file():
+            raise ServerError(f'Script not found: {script}')
+        if self.busy:
+            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        self.busy = action
+        task = asyncio.ensure_future(self.powershell('-File', str(script), *args))
+        task.add_done_callback(lambda t: self._finished(action, t))
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), self.reply_window)
+        except asyncio.TimeoutError:
+            return None, ''
+
+    def _finished(self, action, task):
+        self.busy = None
+        if task.cancelled():
+            return
+        if task.exception():
+            log.error('%s failed', action, exc_info=task.exception())
+        else:
+            log.info('%s exited with %s:\n%s', action, *task.result())
+
+    async def status(self):
+        encoded = base64.b64encode(STATUS_SCRIPT.encode('utf-16-le')).decode()
+        code, out = await self.powershell('-EncodedCommand', encoded,
+                                          env={'ICARUS_ROOT': str(self.install_root), 'ICARUS_PORT': str(self.port)})
+        if code != 0:
+            raise ServerError(f'Status check failed:\n{tail(out)}')
+        state = json.loads(out.strip().splitlines()[-1])
+        backups = list((self.install_root / 'backups').glob('Icarus-*.zip'))
+        state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
+        return state
+
+
+def tail(text, limit=1500):
+    text = text.strip().replace('```', "'''")
+    return text if len(text) <= limit else '...' + text[-limit:]
+
+
+def report(label, code, output):
+    if code is None:
+        return f'{label} is still running on the host. Check `/server status` in a few minutes.'
+    body = f'\n```\n{tail(output)}\n```' if output.strip() else ''
+    if code == 0:
+        return f'{label} finished.{body}'
+    return f'{label} failed (exit code {code}).{body}'
+
+
+def describe(control, state):
+    lines = []
+    if not state['running']:
+        lines.append(f'**{control.name}** is offline.')
+    else:
+        ready = 'port {} is open' if state.get('port_open') else 'still loading, port {} not open yet'
+        lines.append(f"**{control.name}** is online since <t:{state['started']}:R> ({ready.format(control.port)}).")
+    if control.busy:
+        lines.append(f'{LABELS[control.busy]} is running right now.')
+    lines.append(f"Last backup: <t:{state['backup']}:R>." if state['backup'] else 'No backups found.')
+    return '\n'.join(lines)
+
+
+def install_server_commands(bot, control):
+    server = app_commands.Group(name='server', description='Control the Icarus server (server admins only).', guild_only=True)
+
+    async def allowed(interaction):
+        if interaction.user.id not in control.admins:
+            await interaction.response.send_message('Only the server admins can use /server, compa.', ephemeral=True)
+            return False
+        if not control.windows:
+            await interaction.response.send_message('Server commands only work when Compabot runs on the Windows server host.', ephemeral=True)
+            return False
+        return True
+
+    async def run(interaction, action, *args):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            text = report(LABELS[action], *await control.run_action(action, *args))
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
+
+    @server.command(name='status', description='Show whether the Icarus server is running and when it was last backed up.')
+    async def status(interaction: discord.Interaction):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            text = describe(control, await control.status())
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
+
+    @server.command(name='start', description='Back up and start the Icarus server, optionally updating it first.')
+    async def start(interaction: discord.Interaction, update: bool = False):
+        await run(interaction, 'start', *(['-Update'] if update else []))
+
+    @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
+    async def stop(interaction: discord.Interaction):
+        await run(interaction, 'stop')
+
+    @server.command(name='backup', description='Back up the Icarus save files now.')
+    async def backup(interaction: discord.Interaction):
+        await run(interaction, 'backup')
+
+    @server.command(name='update', description='Update the Icarus server through SteamCMD (stop it first).')
+    async def update(interaction: discord.Interaction):
+        await run(interaction, 'update')
+
+    bot.tree.add_command(server)

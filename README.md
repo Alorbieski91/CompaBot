@@ -1,6 +1,7 @@
 # Compabot
 
-A small personal-server bot with a quote book, shared favorites, and bilingual greetings.
+A small personal-server bot with a quote book, shared favorites, bilingual greetings,
+and controls for the CompaWorld Icarus server.
 Requires Python 3.10 or newer.
 
 ## Setup
@@ -55,6 +56,27 @@ with a 30-second channel cooldown. New members receive a welcome in the system c
 Outgoing messages suppress user, role, and everyone pings. Quote saving, quote playback,
 and picking have 5-second per-user cooldowns. Errors are logged to the console.
 
+## Icarus server commands
+
+`/server` runs the PowerShell scripts installed with the Icarus server, so Compabot must run
+on the same Windows PC as the server, signed in as the same user (not as a Windows service:
+the stop script needs the server's console window). Set `SERVER_ADMIN_IDS` in `.env` to the
+Discord user IDs allowed to use it, separated by commas (Developer Mode > right-click a
+user > Copy User ID). Everyone else is refused. If the scripts are not in
+`C:\IcarusServer\scripts`, set `ICARUS_SCRIPTS_DIR`.
+
+| Command | Behavior |
+| --- | --- |
+| `/server status` | Whether the server is running, since when, whether port 17777 is open, and the last backup time. |
+| `/server start update:False` | Back up and start the server. `update:True` runs SteamCMD first. |
+| `/server stop` | Close the server window normally, wait up to 30 seconds, then take a final backup. |
+| `/server backup` | Zip the save folder into `backups` now. |
+| `/server update` | Back up and update through SteamCMD. The server must be stopped first. |
+
+Only one start, stop, backup, or update runs at a time. Results are posted in the channel
+with the script's output. If a script takes longer than 14 minutes, Compabot says it is
+still running and lets it finish; use `/server status` to check on it.
+
 ## Storage and checks
 
 Quotes and favorites live in `data/compabot.sqlite3`, relative to the script, and survive
@@ -66,4 +88,4 @@ local environments are ignored by Git. Only one bot process should use the datab
 ```
 
 `Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite. No external database or paid service is needed.
+`storage.py` handles SQLite, and `server_control.py` defines `/server`. No external database or paid service is needed.
