@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import os
 import sys
 import tempfile
@@ -140,12 +139,14 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         for name, stamp in (('Icarus-1.zip', 1_700_000_000), ('Icarus-2.zip', 1_800_000_000)):
             (backups / name).write_text('')
             os.utime(backups / name, (stamp, stamp))
-        self.runner.result = (0, '{"running":true,"port_open":true,"started":1790000000}\r\n')
+        self.runner.result = (0, '#< CLIXML\r\n{"running":true,"port_open":true,"started":1790000000}\r\n'
+                                 '<Objs Version="1.1.0.1"><Obj S="progress" RefId="0"></Obj></Objs>\r\n')
         interaction = self.interaction()
         await self.command('status').callback(interaction)
         argv, env = self.runner.calls[0]
-        script = base64.b64decode(argv[argv.index('-EncodedCommand') + 1]).decode('utf-16-le')
-        self.assertIn('Get-NetUDPEndpoint', script)
+        script = Path(argv[argv.index('-File') + 1])
+        self.assertEqual(script.name, 'Get-IcarusStatus.ps1')
+        self.assertIn("$ProgressPreference = 'SilentlyContinue'", script.read_text())
         self.assertEqual(env, {'ICARUS_ROOT': self.folder.name, 'ICARUS_PORT': '17777'})
         text = self.sent(interaction)
         self.assertIn('**CompaWorld** is online since <t:1790000000:R> (port 17777 is open)', text)
@@ -156,6 +157,15 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('status').callback(interaction)
         self.assertEqual(self.sent(interaction), '**CompaWorld** is offline.\nNo backups found.')
+
+    async def test_status_without_json(self):
+        self.runner.result = (0, '#< CLIXML\r\n<Objs Version="1.1.0.1"><Obj S="progress"></Obj></Objs>\r\nWARNING: odd')
+        interaction = self.interaction()
+        await self.command('status').callback(interaction)
+        text = self.sent(interaction)
+        self.assertIn('Status check returned something unexpected', text)
+        self.assertIn('WARNING: odd', text)
+        self.assertNotIn('CLIXML', text)
 
     async def test_status_failure(self):
         self.runner.result = (1, 'Access denied')

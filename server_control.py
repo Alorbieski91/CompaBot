@@ -1,6 +1,5 @@
 """/server commands that run the Icarus PowerShell scripts on this Windows host."""
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -20,15 +19,7 @@ SCRIPTS = {'start': 'Start-IcarusServer.ps1', 'stop': 'Stop-IcarusServer.ps1',
 LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update'}
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
-STATUS_SCRIPT = r'''
-$ErrorActionPreference = 'Stop'
-$p = Get-CimInstance Win32_Process -Filter "Name LIKE 'IcarusServer%'" |
-    Where-Object ExecutablePath -like "$($env:ICARUS_ROOT)*" | Sort-Object CreationDate | Select-Object -First 1
-if (-not $p) { '{"running":false}'; exit 0 }
-$port = [bool](Get-NetUDPEndpoint -LocalPort ([int]$env:ICARUS_PORT) -ErrorAction SilentlyContinue)
-[pscustomobject]@{ running = $true; port_open = $port
-    started = [DateTimeOffset]::new($p.CreationDate).ToUnixTimeSeconds() } | ConvertTo-Json -Compress
-'''
+STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
 
 
 class ServerError(Exception):
@@ -100,19 +91,25 @@ class ServerControl:
             log.info('%s exited with %s:\n%s', action, *task.result())
 
     async def status(self):
-        encoded = base64.b64encode(STATUS_SCRIPT.encode('utf-16-le')).decode()
-        code, out = await self.powershell('-EncodedCommand', encoded,
+        code, out = await self.powershell('-File', str(STATUS_SCRIPT),
                                           env={'ICARUS_ROOT': str(self.install_root), 'ICARUS_PORT': str(self.port)})
         if code != 0:
             raise ServerError(f'Status check failed:\n{tail(out)}')
-        state = json.loads(out.strip().splitlines()[-1])
+        # Windows PowerShell can mix progress records (#< CLIXML) into the output, so
+        # read the JSON line itself rather than whatever line comes last.
+        lines = [line.strip() for line in out.splitlines() if line.strip().startswith('{')]
+        try:
+            state = json.loads(lines[-1])
+        except (IndexError, ValueError):
+            raise ServerError(f'Status check returned something unexpected:\n{tail(out)}') from None
         backups = list((self.install_root / 'backups').glob('Icarus-*.zip'))
         state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
         return state
 
 
 def tail(text, limit=1500):
-    text = text.strip().replace('```', "'''")
+    text = '\n'.join(line for line in text.splitlines()
+                     if not line.startswith(('#< CLIXML', '<Objs '))).strip().replace('```', "'''")
     return text if len(text) <= limit else '...' + text[-limit:]
 
 
