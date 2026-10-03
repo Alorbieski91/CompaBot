@@ -19,9 +19,14 @@ if ($Remove) {
 }
 
 $launcher = Join-Path $PSScriptRoot 'Start-CompaBot.ps1'
-if (-not (Test-Path (Join-Path $PSScriptRoot '.venv\Scripts\python.exe'))) {
-    throw 'Python environment not found in .venv. Follow the README setup first.'
+$python = & $launcher -FindPython
+$ErrorActionPreference = 'Continue'  # so the import check's error text doesn't stop the script
+& $python -c 'import discord, dotenv' 2>$null
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0) {
+    throw "$python is missing Compabot's packages. Run: & '$python' -m pip install -r requirements.txt"
 }
+Write-Host "Using $python"
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $PSScriptRoot `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`""
 # The short delay lets the network come up after sign-in.
