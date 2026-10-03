@@ -1,12 +1,22 @@
 # Runs Compabot and restarts it if it crashes or loses its connection, waiting 30 seconds
 # between tries. Used by the CompaBot logon task (see Install-CompaBotStartup.ps1).
 # Output goes to logs\compabot.log; the previous run's log is kept as logs\compabot.prev.log.
+# -FindPython only prints which Python it would use.
+param([switch]$FindPython)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+# Use a virtual environment in this folder if there is one, otherwise Python from PATH
+# (skipping the Microsoft Store shortcut, which only opens the Store).
+$python = @('.venv\Scripts\python.exe', 'venv\Scripts\python.exe', 'Scripts\python.exe') |
+    ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $python) {
+    $python = Get-Command python.exe -All -ErrorAction SilentlyContinue |
+        Where-Object Source -notlike '*\WindowsApps\*' | Select-Object -First 1 -ExpandProperty Source
+}
+if (-not $python) { throw 'Python not found in .venv, venv, or this folder, or on PATH. Follow the README setup first.' }
+if ($FindPython) { $python; exit 0 }
 $bot = Join-Path $PSScriptRoot 'Compabot.py'
 $logs = Join-Path $PSScriptRoot 'logs'
-if (-not (Test-Path $python)) { throw "Python environment not found at $python. Follow the README setup first." }
 New-Item -ItemType Directory -Force $logs | Out-Null
 
 $running = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |

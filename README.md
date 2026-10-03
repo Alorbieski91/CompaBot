@@ -88,7 +88,8 @@ powershell -ExecutionPolicy Bypass -File .\Install-CompaBotStartup.ps1
 ```
 
 This creates a Task Scheduler task named `CompaBot` that runs `Start-CompaBot.ps1` hidden,
-30 seconds after you sign in. Output goes to `logs\compabot.log` (the run before is kept as
+30 seconds after you sign in. It uses Python from `.venv`, `venv`, or this folder if one has
+a virtual environment, otherwise the Python on your PATH. Output goes to `logs\compabot.log` (the run before is kept as
 `logs\compabot.prev.log`). Use `.\Stop-CompaBot.ps1` to stop it, `Start-ScheduledTask CompaBot`
 to start it again, and `.\Install-CompaBotStartup.ps1 -Remove` to turn auto-start off.
 Don't also run `Compabot.py` by hand while the task is running.
