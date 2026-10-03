@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import discord
@@ -69,7 +70,7 @@ class ServerControl:
     def powershell(self, *args, env=None):
         return self.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args], env)
 
-    async def run_action(self, action, *args):
+    async def run_action(self, action, *args, window=None):
         """Run one script. Returns (exit code, output); exit code None means it is still running."""
         script = self.scripts_dir / SCRIPTS[action]
         if not script.is_file():
@@ -80,7 +81,7 @@ class ServerControl:
         task = asyncio.ensure_future(self.powershell('-File', str(script), *args))
         task.add_done_callback(lambda t: self._finished(action, t))
         try:
-            return await asyncio.wait_for(asyncio.shield(task), self.reply_window)
+            return await asyncio.wait_for(asyncio.shield(task), self.reply_window if window is None else window)
         except asyncio.TimeoutError:
             return None, ''
 
@@ -155,11 +156,13 @@ def report(label, code, output):
     return f'{label} failed (exit code {code}).{body}'
 
 
-def mod_report(text, lines, limit=2000):
-    # report() keeps script output to about 1,500 characters, so the mod lines fit under
-    # Discord's 2,000-character message limit.
-    text += '\nMods:\n' + '\n'.join(lines)
+def fit(text, limit=2000):
+    """Keep a reply under Discord's 2,000-character message limit."""
     return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def mod_report(text, lines):
+    return fit(text + '\nMods:\n' + '\n'.join(lines))
 
 
 def describe(control, state):
@@ -197,6 +200,16 @@ def install_server_commands(bot, control):
             text = str(error)
         await interaction.followup.send(text)
 
+    async def update_with_mods():
+        """Update the game, then its mods if that worked. Returns (update exit code, report)."""
+        code, output = await control.run_action('update')
+        text = report('Update', code, output)
+        if code == 0:
+            text = mod_report(text, await control.update_mods())
+        elif code is None:
+            text += ' Then run `/server mods` to update the mods.'
+        return code, text
+
     @server.command(name='status', description='Show whether the Icarus server is running and when it was last backed up.')
     async def status(interaction: discord.Interaction):
         if not await allowed(interaction):
@@ -208,9 +221,28 @@ def install_server_commands(bot, control):
             text = str(error)
         await interaction.followup.send(text)
 
-    @server.command(name='start', description='Back up and start the Icarus server, optionally updating it first.')
+    @server.command(name='start', description='Back up and start the Icarus server, optionally updating it and its mods first.')
     async def start(interaction: discord.Interaction, update: bool = False):
-        await run(interaction, 'start', *(['-Update'] if update else []))
+        if not update:
+            await run(interaction, 'start')
+            return
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        began = time.monotonic()
+        try:
+            code, text = await update_with_mods()
+            if code == 0:
+                # Start after the mods are swapped, within what is left of the reply window.
+                window = max(1, control.reply_window - (time.monotonic() - began))
+                text += '\n' + report('Start', *await control.run_action('start', window=window))
+            elif code is None:
+                text += ' After that, start it with `/server start`.'
+            else:
+                text += '\nThe server was not started.'
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(fit(text))
 
     @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
     async def stop(interaction: discord.Interaction):
@@ -226,12 +258,7 @@ def install_server_commands(bot, control):
             return
         await interaction.response.defer(thinking=True)
         try:
-            code, output = await control.run_action('update')
-            text = report('Update', code, output)
-            if code == 0:
-                text = mod_report(text, await control.update_mods())
-            elif code is None:
-                text += ' Then run `/server mods` to update the mods.'
+            text = (await update_with_mods())[1]
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(text)

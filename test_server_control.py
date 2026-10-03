@@ -78,17 +78,39 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Windows server host', interaction.response.send_message.call_args.args[0])
         self.assertEqual(self.runner.calls, [])
 
-    async def test_start_runs_script_with_update_flag(self):
+    async def test_start_runs_script(self):
         interaction = self.interaction()
-        await self.command('start').callback(interaction, True)
+        await self.command('start').callback(interaction, False)
         argv, _ = self.runner.calls[0]
         self.assertEqual(argv[0], 'powershell.exe')
-        self.assertEqual(argv[-3:], ['-File', str(self.scripts / 'Start-IcarusServer.ps1'), '-Update'])
+        self.assertEqual(argv[-2:], ['-File', str(self.scripts / 'Start-IcarusServer.ps1')])
         interaction.response.defer.assert_awaited_once()
         self.assertIn('Start finished.', self.sent(interaction))
         self.assertIn('Done.', self.sent(interaction))
-        await self.command('start').callback(self.interaction(), False)
-        self.assertEqual(self.runner.calls[1][0][-1], str(self.scripts / 'Start-IcarusServer.ps1'))
+
+    async def test_start_with_update_updates_game_then_mods_then_starts(self):
+        order = []
+        self.bot.server.mods.update = lambda: order.append('mods') or ['laanp-PetesBeaconTeleport: updated w251 v1 to w252 v1.']
+        runner = self.runner
+        async def tracking(argv, env=None):
+            order.append(Path(argv[-1]).name)
+            return await runner(argv, env)
+        self.bot.server.run = tracking
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, True)
+        self.assertEqual(order, ['Update-IcarusServer.ps1', 'mods', 'Start-IcarusServer.ps1'])
+        self.assertEqual(self.sent(interaction),
+                         'Update finished.\n```\nDone.\n```\nMods:\nlaanp-PetesBeaconTeleport: updated w251 v1 to w252 v1.'
+                         '\nStart finished.\n```\nDone.\n```')
+        self.assertIsNone(self.bot.server.busy)
+
+    async def test_start_with_failed_update_does_not_start(self):
+        self.runner.result = (1, 'Stop the Icarus server before updating it.')
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, True)
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertIn('Update failed (exit code 1)', self.sent(interaction))
+        self.assertIn('The server was not started.', self.sent(interaction))
 
     async def test_each_action_runs_its_script(self):
         for name in ('stop', 'backup', 'update'):
