@@ -6,17 +6,20 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import discord
 from discord import app_commands
+
+from mod_update import ModError, ModUpdater
 
 log = logging.getLogger('compabot.server')
 
 DEFAULT_SCRIPTS_DIR = r'C:\IcarusServer\scripts'
 SCRIPTS = {'start': 'Start-IcarusServer.ps1', 'stop': 'Stop-IcarusServer.ps1',
            'backup': 'Backup-IcarusServer.ps1', 'update': 'Update-IcarusServer.ps1'}
-LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update'}
+LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update', 'mods': 'Mod update'}
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
 STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
@@ -62,11 +65,12 @@ class ServerControl:
         self.windows = os.name == 'nt'
         self.busy = None
         self.reply_window = REPLY_WINDOW
+        self.mods = ModUpdater(self.install_root)
 
     def powershell(self, *args, env=None):
         return self.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args], env)
 
-    async def run_action(self, action, *args):
+    async def run_action(self, action, *args, window=None):
         """Run one script. Returns (exit code, output); exit code None means it is still running."""
         script = self.scripts_dir / SCRIPTS[action]
         if not script.is_file():
@@ -77,7 +81,7 @@ class ServerControl:
         task = asyncio.ensure_future(self.powershell('-File', str(script), *args))
         task.add_done_callback(lambda t: self._finished(action, t))
         try:
-            return await asyncio.wait_for(asyncio.shield(task), self.reply_window)
+            return await asyncio.wait_for(asyncio.shield(task), self.reply_window if window is None else window)
         except asyncio.TimeoutError:
             return None, ''
 
@@ -89,6 +93,19 @@ class ServerControl:
             log.error('%s failed', action, exc_info=task.exception())
         else:
             log.info('%s exited with %s:\n%s', action, *task.result())
+
+    async def update_mods(self):
+        """Bring installed mods up to the latest release. Returns lines to report."""
+        if self.busy:
+            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        self.busy = 'mods'
+        try:
+            return await asyncio.to_thread(self.mods.update)
+        except (ModError, OSError) as error:
+            log.warning('Mod update failed: %s', error)
+            return [f'Mod update failed: {error}']
+        finally:
+            self.busy = None
 
     async def status(self):
         code, out = await self.powershell('-File', str(STATUS_SCRIPT),
@@ -139,6 +156,15 @@ def report(label, code, output):
     return f'{label} failed (exit code {code}).{body}'
 
 
+def fit(text, limit=2000):
+    """Keep a reply under Discord's 2,000-character message limit."""
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def mod_report(text, lines):
+    return fit(text + '\nMods:\n' + '\n'.join(lines))
+
+
 def describe(control, state):
     lines = []
     if not state['running']:
@@ -174,6 +200,16 @@ def install_server_commands(bot, control):
             text = str(error)
         await interaction.followup.send(text)
 
+    async def update_with_mods():
+        """Update the game, then its mods if that worked. Returns (update exit code, report)."""
+        code, output = await control.run_action('update')
+        text = report('Update', code, output)
+        if code == 0:
+            text = mod_report(text, await control.update_mods())
+        elif code is None:
+            text += ' Then run `/server mods` to update the mods.'
+        return code, text
+
     @server.command(name='status', description='Show whether the Icarus server is running and when it was last backed up.')
     async def status(interaction: discord.Interaction):
         if not await allowed(interaction):
@@ -185,9 +221,28 @@ def install_server_commands(bot, control):
             text = str(error)
         await interaction.followup.send(text)
 
-    @server.command(name='start', description='Back up and start the Icarus server, optionally updating it first.')
+    @server.command(name='start', description='Back up and start the Icarus server, optionally updating it and its mods first.')
     async def start(interaction: discord.Interaction, update: bool = False):
-        await run(interaction, 'start', *(['-Update'] if update else []))
+        if not update:
+            await run(interaction, 'start')
+            return
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        began = time.monotonic()
+        try:
+            code, text = await update_with_mods()
+            if code == 0:
+                # Start after the mods are swapped, within what is left of the reply window.
+                window = max(1, control.reply_window - (time.monotonic() - began))
+                text += '\n' + report('Start', *await control.run_action('start', window=window))
+            elif code is None:
+                text += ' After that, start it with `/server start`.'
+            else:
+                text += '\nThe server was not started.'
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(fit(text))
 
     @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
     async def stop(interaction: discord.Interaction):
@@ -197,8 +252,28 @@ def install_server_commands(bot, control):
     async def backup(interaction: discord.Interaction):
         await run(interaction, 'backup')
 
-    @server.command(name='update', description='Update the Icarus server through SteamCMD (stop it first).')
+    @server.command(name='update', description='Update the Icarus server through SteamCMD, then its mods (stop it first).')
     async def update(interaction: discord.Interaction):
-        await run(interaction, 'update')
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            text = (await update_with_mods())[1]
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
+
+    @server.command(name='mods', description='Update the server mods to their latest release (stop the server first).')
+    async def mods(interaction: discord.Interaction):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            if (await control.status())['running']:
+                raise ServerError('Stop the Icarus server before updating its mods.')
+            text = '\n'.join(await control.update_mods())
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
 
     bot.tree.add_command(server)

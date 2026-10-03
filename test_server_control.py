@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from Compabot import create_bot
+from mod_update import ModError
 from server_control import SCRIPTS, ServerControl, install_server_commands, read_config, run_process
 
 ADMIN = 2
@@ -59,11 +60,11 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_registration(self):
         group = self.bot.tree.get_command('server')
-        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'backup', 'update'})
+        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'backup', 'update', 'mods'})
         group.to_dict(self.bot.tree)
 
     async def test_non_admins_are_refused_before_anything_runs(self):
-        for name in ('status', 'stop', 'backup', 'update'):
+        for name in ('status', 'stop', 'backup', 'update', 'mods'):
             interaction = self.interaction(user=99)
             await self.command(name).callback(interaction)
             self.assertIn('Only the server admins', interaction.response.send_message.call_args.args[0])
@@ -77,17 +78,39 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Windows server host', interaction.response.send_message.call_args.args[0])
         self.assertEqual(self.runner.calls, [])
 
-    async def test_start_runs_script_with_update_flag(self):
+    async def test_start_runs_script(self):
         interaction = self.interaction()
-        await self.command('start').callback(interaction, True)
+        await self.command('start').callback(interaction, False)
         argv, _ = self.runner.calls[0]
         self.assertEqual(argv[0], 'powershell.exe')
-        self.assertEqual(argv[-3:], ['-File', str(self.scripts / 'Start-IcarusServer.ps1'), '-Update'])
+        self.assertEqual(argv[-2:], ['-File', str(self.scripts / 'Start-IcarusServer.ps1')])
         interaction.response.defer.assert_awaited_once()
         self.assertIn('Start finished.', self.sent(interaction))
         self.assertIn('Done.', self.sent(interaction))
-        await self.command('start').callback(self.interaction(), False)
-        self.assertEqual(self.runner.calls[1][0][-1], str(self.scripts / 'Start-IcarusServer.ps1'))
+
+    async def test_start_with_update_updates_game_then_mods_then_starts(self):
+        order = []
+        self.bot.server.mods.update = lambda: order.append('mods') or ['laanp-PetesBeaconTeleport: updated w251 v1 to w252 v1.']
+        runner = self.runner
+        async def tracking(argv, env=None):
+            order.append(Path(argv[-1]).name)
+            return await runner(argv, env)
+        self.bot.server.run = tracking
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, True)
+        self.assertEqual(order, ['Update-IcarusServer.ps1', 'mods', 'Start-IcarusServer.ps1'])
+        self.assertEqual(self.sent(interaction),
+                         'Update finished.\n```\nDone.\n```\nMods:\nlaanp-PetesBeaconTeleport: updated w251 v1 to w252 v1.'
+                         '\nStart finished.\n```\nDone.\n```')
+        self.assertIsNone(self.bot.server.busy)
+
+    async def test_start_with_failed_update_does_not_start(self):
+        self.runner.result = (1, 'Stop the Icarus server before updating it.')
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, True)
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertIn('Update failed (exit code 1)', self.sent(interaction))
+        self.assertIn('The server was not started.', self.sent(interaction))
 
     async def test_each_action_runs_its_script(self):
         for name in ('stop', 'backup', 'update'):
@@ -102,6 +125,40 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Update failed (exit code 1)', text)
         self.assertIn('Stop the Icarus server before updating it.', text)
         self.assertEqual(text.count('```'), 2)
+
+    async def test_update_then_updates_mods(self):
+        self.bot.server.mods.update = lambda: ['laanp-PetesBeaconTeleport: updated w251 v1 to w252 v1.']
+        interaction = self.interaction()
+        await self.command('update').callback(interaction)
+        self.assertEqual(self.sent(interaction),
+                         'Update finished.\n```\nDone.\n```\nMods:\nlaanp-PetesBeaconTeleport: updated w251 v1 to w252 v1.')
+        self.assertIsNone(self.bot.server.busy)
+
+    async def test_failed_update_leaves_mods_alone(self):
+        self.bot.server.mods.update = AsyncMock(side_effect=AssertionError('should not run'))
+        self.runner.result = (1, 'Stop the Icarus server before updating it.')
+        interaction = self.interaction()
+        await self.command('update').callback(interaction)
+        self.assertNotIn('Mods', self.sent(interaction))
+
+    async def test_mod_update_error_is_reported(self):
+        def boom():
+            raise ModError('Could not read the mod list from GitHub: timed out')
+        self.bot.server.mods.update = boom
+        interaction = self.interaction()
+        await self.command('update').callback(interaction)
+        self.assertIn('Mods:\nMod update failed: Could not read the mod list', self.sent(interaction))
+
+    async def test_mods_command_needs_server_stopped(self):
+        self.bot.server.mods.update = lambda: ['laanp-PetesBeaconTeleport: w252 v1 is the latest release.']
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        interaction = self.interaction()
+        await self.command('mods').callback(interaction)
+        self.assertEqual(self.sent(interaction), 'Stop the Icarus server before updating its mods.')
+        self.runner.result = (0, '{"running":false}')
+        interaction = self.interaction()
+        await self.command('mods').callback(interaction)
+        self.assertEqual(self.sent(interaction), 'laanp-PetesBeaconTeleport: w252 v1 is the latest release.')
 
     async def test_one_action_at_a_time(self):
         self.runner.gate = asyncio.Event()
