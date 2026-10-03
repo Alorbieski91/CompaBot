@@ -8,13 +8,14 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from features import install_features
+from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, install_server_commands
 from storage import Store
 
 BASE = Path(__file__).resolve().parent
 log = logging.getLogger('compabot')
 
 class CompaBot(commands.Bot):
-    def __init__(self, guild_id=None):
+    def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -25,10 +26,12 @@ class CompaBot(commands.Bot):
         self.guild_id = guild_id
         self.greetings = {}
         self.store = None
+        self.server = ServerControl(server_admins, scripts_dir)
 
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
         install_features(self)
+        install_server_commands(self, self.server)
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -83,8 +86,8 @@ class CompaBot(commands.Bot):
         await ctx.send(text, ephemeral=ctx.interaction is not None)
 
 
-def create_bot(guild_id=None):
-    bot = CompaBot(guild_id)
+def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR):
+    bot = CompaBot(guild_id, server_admins, scripts_dir)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -107,4 +110,8 @@ if __name__ == '__main__':
     raw_guild = os.getenv('GUILD_ID', '').strip()
     if raw_guild and (not raw_guild.isdecimal() or int(raw_guild) <= 0):
         raise SystemExit('GUILD_ID must be your numeric Discord server ID, or blank.')
-    create_bot(int(raw_guild) if raw_guild else None).run(token)
+    raw_admins = [part.strip() for part in os.getenv('SERVER_ADMIN_IDS', '').split(',') if part.strip()]
+    if not all(part.isdecimal() for part in raw_admins):
+        raise SystemExit('SERVER_ADMIN_IDS must be comma-separated numeric Discord user IDs, or blank.')
+    scripts_dir = os.getenv('ICARUS_SCRIPTS_DIR', '').strip() or DEFAULT_SCRIPTS_DIR
+    create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir).run(token)
