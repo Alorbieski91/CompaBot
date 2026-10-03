@@ -139,7 +139,8 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         for name, stamp in (('Icarus-1.zip', 1_700_000_000), ('Icarus-2.zip', 1_800_000_000)):
             (backups / name).write_text('')
             os.utime(backups / name, (stamp, stamp))
-        self.runner.result = (0, '#< CLIXML\r\n{"running":true,"port_open":true,"started":1790000000}\r\n'
+        self.write_log('LogNet: GameNetDriver SteamNetDriver_1 IpNetDriver listening on port 17777\n', 1_790_000_100)
+        self.runner.result = (0, '#< CLIXML\r\n{"running":true,"started":1790000000}\r\n'
                                  '<Objs Version="1.1.0.1"><Obj S="progress" RefId="0"></Obj></Objs>\r\n')
         interaction = self.interaction()
         await self.command('status').callback(interaction)
@@ -147,10 +148,26 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         script = Path(argv[argv.index('-File') + 1])
         self.assertEqual(script.name, 'Get-IcarusStatus.ps1')
         self.assertIn("$ProgressPreference = 'SilentlyContinue'", script.read_text())
-        self.assertEqual(env, {'ICARUS_ROOT': self.folder.name, 'ICARUS_PORT': '17777'})
+        self.assertNotIn('Get-NetUDPEndpoint', script.read_text())
+        self.assertEqual(env, {'ICARUS_ROOT': self.folder.name})
         text = self.sent(interaction)
-        self.assertIn('**CompaWorld** is online since <t:1790000000:R> (port 17777 is open)', text)
+        self.assertIn('**CompaWorld** is online since <t:1790000000:R> (ready for players on port 17777)', text)
         self.assertIn('Last backup: <t:1800000000:R>', text)
+
+    def write_log(self, text, stamp):
+        logs = Path(self.folder.name) / 'data' / 'Saved' / 'Logs'
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / 'Icarus.log').write_text(text)
+        os.utime(logs / 'Icarus.log', (stamp, stamp))
+
+    async def test_status_still_loading(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        for text, stamp in (('LogInit: starting\n', 1_790_000_100),  # current log, not listening yet
+                            ('IpNetDriver listening on port 17777\n', 1_700_000_000)):  # stale log from an earlier run
+            self.write_log(text, stamp)
+            interaction = self.interaction()
+            await self.command('status').callback(interaction)
+            self.assertIn('still loading, not accepting players on port 17777 yet', self.sent(interaction))
 
     async def test_status_offline_without_backups(self):
         self.runner.result = (0, '{"running":false}')

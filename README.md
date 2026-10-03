@@ -67,7 +67,7 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 
 | Command | Behavior |
 | --- | --- |
-| `/server status` | Whether the server is running, since when, whether port 17777 is open, and the last backup time. |
+| `/server status` | Whether the server is running, since when, whether it is ready for players on port 17777 (read from the server log), and the last backup time. |
 | `/server start update:False` | Back up and start the server. `update:True` runs SteamCMD first. |
 | `/server stop` | Close the server window normally, wait up to 30 seconds, then take a final backup. |
 | `/server backup` | Zip the save folder into `backups` now. |

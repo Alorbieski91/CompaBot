@@ -92,7 +92,7 @@ class ServerControl:
 
     async def status(self):
         code, out = await self.powershell('-File', str(STATUS_SCRIPT),
-                                          env={'ICARUS_ROOT': str(self.install_root), 'ICARUS_PORT': str(self.port)})
+                                          env={'ICARUS_ROOT': str(self.install_root)})
         if code != 0:
             raise ServerError(f'Status check failed:\n{tail(out)}')
         # Windows PowerShell can mix progress records (#< CLIXML) into the output, so
@@ -102,9 +102,26 @@ class ServerControl:
             state = json.loads(lines[-1])
         except (IndexError, ValueError):
             raise ServerError(f'Status check returned something unexpected:\n{tail(out)}') from None
+        if state['running']:
+            state['ready'] = self.listening(state['started'])
         backups = list((self.install_root / 'backups').glob('Icarus-*.zip'))
         state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
         return state
+
+
+    def listening(self, started):
+        """Whether the current server log says the game port is accepting players.
+
+        Icarus uses Steam networking, so the game port never appears as a normal
+        Windows UDP endpoint; the log line is the reliable signal.
+        """
+        log_file = self.install_root / 'data' / 'Saved' / 'Logs' / 'Icarus.log'
+        try:
+            if log_file.stat().st_mtime < started:
+                return False
+            return f'listening on port {self.port}'.encode() in log_file.read_bytes()
+        except OSError:
+            return False
 
 
 def tail(text, limit=1500):
@@ -127,7 +144,7 @@ def describe(control, state):
     if not state['running']:
         lines.append(f'**{control.name}** is offline.')
     else:
-        ready = 'port {} is open' if state.get('port_open') else 'still loading, port {} not open yet'
+        ready = 'ready for players on port {}' if state.get('ready') else 'still loading, not accepting players on port {} yet'
         lines.append(f"**{control.name}** is online since <t:{state['started']}:R> ({ready.format(control.port)}).")
     if control.busy:
         lines.append(f'{LABELS[control.busy]} is running right now.')
