@@ -11,12 +11,14 @@ from pathlib import Path
 import discord
 from discord import app_commands
 
+from mod_update import ModError, ModUpdater
+
 log = logging.getLogger('compabot.server')
 
 DEFAULT_SCRIPTS_DIR = r'C:\IcarusServer\scripts'
 SCRIPTS = {'start': 'Start-IcarusServer.ps1', 'stop': 'Stop-IcarusServer.ps1',
            'backup': 'Backup-IcarusServer.ps1', 'update': 'Update-IcarusServer.ps1'}
-LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update'}
+LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update', 'mods': 'Mod update'}
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
 STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
@@ -62,6 +64,7 @@ class ServerControl:
         self.windows = os.name == 'nt'
         self.busy = None
         self.reply_window = REPLY_WINDOW
+        self.mods = ModUpdater(self.install_root)
 
     def powershell(self, *args, env=None):
         return self.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args], env)
@@ -89,6 +92,19 @@ class ServerControl:
             log.error('%s failed', action, exc_info=task.exception())
         else:
             log.info('%s exited with %s:\n%s', action, *task.result())
+
+    async def update_mods(self):
+        """Bring installed mods up to the latest release. Returns lines to report."""
+        if self.busy:
+            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        self.busy = 'mods'
+        try:
+            return await asyncio.to_thread(self.mods.update)
+        except (ModError, OSError) as error:
+            log.warning('Mod update failed: %s', error)
+            return [f'Mod update failed: {error}']
+        finally:
+            self.busy = None
 
     async def status(self):
         code, out = await self.powershell('-File', str(STATUS_SCRIPT),
@@ -137,6 +153,13 @@ def report(label, code, output):
     if code == 0:
         return f'{label} finished.{body}'
     return f'{label} failed (exit code {code}).{body}'
+
+
+def mod_report(text, lines, limit=2000):
+    # report() keeps script output to about 1,500 characters, so the mod lines fit under
+    # Discord's 2,000-character message limit.
+    text += '\nMods:\n' + '\n'.join(lines)
+    return text if len(text) <= limit else text[:limit - 3] + '...'
 
 
 def describe(control, state):
@@ -197,8 +220,33 @@ def install_server_commands(bot, control):
     async def backup(interaction: discord.Interaction):
         await run(interaction, 'backup')
 
-    @server.command(name='update', description='Update the Icarus server through SteamCMD (stop it first).')
+    @server.command(name='update', description='Update the Icarus server through SteamCMD, then its mods (stop it first).')
     async def update(interaction: discord.Interaction):
-        await run(interaction, 'update')
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            code, output = await control.run_action('update')
+            text = report('Update', code, output)
+            if code == 0:
+                text = mod_report(text, await control.update_mods())
+            elif code is None:
+                text += ' Then run `/server mods` to update the mods.'
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
+
+    @server.command(name='mods', description='Update the server mods to their latest release (stop the server first).')
+    async def mods(interaction: discord.Interaction):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            if (await control.status())['running']:
+                raise ServerError('Stop the Icarus server before updating its mods.')
+            text = '\n'.join(await control.update_mods())
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
 
     bot.tree.add_command(server)

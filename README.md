@@ -71,11 +71,27 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 | `/server start update:False` | Back up and start the server. `update:True` runs SteamCMD first. |
 | `/server stop` | Close the server window normally, wait up to 30 seconds, then take a final backup. |
 | `/server backup` | Zip the save folder into `backups` now. |
-| `/server update` | Back up and update through SteamCMD. The server must be stopped first. |
+| `/server update` | Back up and update through SteamCMD, then update the mods (below). The server must be stopped first. |
+| `/server mods` | Update the mods only. The server must be stopped first. |
 
-Only one start, stop, backup, or update runs at a time. Results are posted in the channel
+Only one start, stop, backup, update, or mod update runs at a time. Results are posted in the channel
 with the script's output. If a script takes longer than 14 minutes, Compabot says it is
 still running and lets it finish; use `/server status` to check on it.
+
+### Mods
+
+After a successful game update, Compabot checks each `.pak` in
+`server\Icarus\Content\Paks\mods` that is named like laanp's mods
+(`laanp-PetesBeaconTeleport_v1_w252_P.pak`: fix 1 for game week 252) against laanp's
+[mod list](https://github.com/laanp/Icarus_Mods_Separated). When a newer week or fix is out,
+it downloads it, checks it is a real `.pak`, and moves the old file to `backups\mods`
+(the last 5 per mod are kept). Each mod's readme names the game build it was made for; the
+installed build is read from `server\Icarus\Config\version.json`. If the game is newer than
+the latest mod, Compabot keeps the mod and warns that laanp has not caught up yet. It never
+installs a mod made for a newer game than the server has. Other mods are left alone.
+`/server start update:True` does not update mods; use `/server update` and then `/server start`.
+Your own game client needs the same mod file in its own `Content\Paks\mods` folder.
+
 
 ## Start automatically after restarts
 
@@ -118,4 +134,4 @@ local environments are ignored by Git. Only one bot process should use the datab
 ```
 
 `Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite, and `server_control.py` defines `/server`. No external database or paid service is needed.
+`storage.py` handles SQLite, `server_control.py` defines `/server`, and `mod_update.py` updates mods. No external database or paid service is needed.
