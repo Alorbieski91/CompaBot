@@ -4,7 +4,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
 import patch_notes
@@ -34,7 +33,8 @@ JOIN = '[1]LogNet: NotifyAcceptingConnection accepted from: {0}:17777\n[1]LogNet
 NEWS = {'appnews': {'newsitems': [
     {'title': 'Week 253 Update', 'date': 1_790_500_000, 'url': 'https://store.steampowered.com/news/253',
      'contents': '[h2]New Content[/h2][list][*]Added Kiwi eggs: tamed Kiwis now lay eggs in their nest[/list]'
-                 '[h2]Fixes[/h2][list][*]Fixed a crash when opening the map[*]Changed Iron ore yield from 4 to 6[/list]'},
+                 '[h2]Changes[/h2][list][*]Changed Iron ore yield from 4 to 6[*]Updated the main menu art[*]Kiwis will now lay eggs when well fed[/list]'
+                 '[h2]Bug Fixes[/h2][list][*]Fixed a crash when opening the map[*]Tamed wolves no longer fall through floors[/list]'},
     {'title': 'Community Spotlight', 'date': 1_790_600_000, 'url': 'https://x', 'contents': 'Art!'},
     {'title': 'Week 252 Update', 'date': 1_789_900_000, 'url': 'https://x', 'contents': '[*]Added old stuff'},
 ]}}
@@ -194,7 +194,6 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.messages, [])
         self.assertEqual(json.loads(self.state.read_text())['build'], 20400000)
 
-    @mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': ''})
     async def test_posts_gameplay_changes_after_a_new_build(self):
         self.state.write_text(json.dumps({'build': 20300000, 'since': 1_790_000_000}))
         self.manifest(20400000)  # updated by hand since the last check
@@ -203,7 +202,8 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.messages, [
             '**What changed in Icarus** (server now on build 20400000): '
             '[Week 253 Update](<https://store.steampowered.com/news/253>)\n'
-            '- Added Kiwi eggs: tamed Kiwis now lay eggs in their nest\n- Changed Iron ore yield from 4 to 6'])
+            '- Added Kiwi eggs: tamed Kiwis now lay eggs in their nest\n- Changed Iron ore yield from 4 to 6\n'
+            '- Kiwis will now lay eggs when well fed\n- Updated the main menu art'])
         self.assertEqual(json.loads(self.state.read_text()), {'build': 20400000, 'since': 1_790_500_000})
         await self.updater.check()
         self.assertEqual(len(self.messages), 1)
@@ -224,10 +224,9 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
                 self.manifest(20400000)
             return await runner(argv, env)
         self.control.run = install
-        with mock.patch.object(patch_notes, 'ask_claude', mock.AsyncMock(return_value='- Kiwis lay eggs now.')):
-            await self.updater.check()
+        await self.updater.check()
         self.assertIn('Installed Icarus build 20400000', self.messages[0])
-        self.assertTrue(self.messages[1].endswith('\n- Kiwis lay eggs now.'))
+        self.assertIn('- Kiwis will now lay eggs when well fed', self.messages[1])
 
 
 class PatchNotesTests(unittest.IsolatedAsyncioTestCase):
@@ -235,24 +234,16 @@ class PatchNotesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p['title'] for p in patch_notes.update_posts(NEWS, 1_790_000_000)], ['Week 253 Update'])
         self.assertEqual([p['title'] for p in patch_notes.update_posts(NEWS, 0)], ['Week 252 Update', 'Week 253 Update'])
 
-    @mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': ''})
-    async def test_without_a_key_claude_is_not_called(self):
-        self.assertIsNone(await patch_notes.ask_claude(NEWS['appnews']['newsitems']))
+    def test_gameplay_lines_come_first_and_the_list_is_capped(self):
+        items = ''.join(f'[*]Updated menu {i}' for i in range(15)) + '[*]Bears now drop more leather'
+        lines = patch_notes.gameplay_changes([{'contents': '[h2]Changes[/h2][list]' + items + '[/list]'}])
+        self.assertEqual(lines[0], '- Bears now drop more leather')
+        self.assertEqual(len(lines), 13)
+        self.assertEqual(lines[-1], '- ...and 4 more in the notes.')
 
-    @mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    async def test_claude_summary_is_used(self):
-        response = mock.Mock(stop_reason='end_turn', content=[mock.Mock(type='text', text='- Kiwis lay eggs now.')])
-        client = mock.MagicMock()
-        client.__aenter__.return_value = client
-        client.beta.messages.create = mock.AsyncMock(return_value=response)
-        with mock.patch('anthropic.AsyncAnthropic', return_value=client):
-            text = await patch_notes.describe(patch_notes.update_posts(NEWS, 1_790_000_000), 20400000)
-        self.assertTrue(text.endswith('\n- Kiwis lay eggs now.'))
-        sent = client.beta.messages.create.call_args.kwargs
-        self.assertEqual(sent['model'], 'claude-opus-5-5')
-        self.assertIn('Added Kiwi eggs', sent['messages'][0]['content'])
-        self.assertNotIn('[*]', sent['messages'][0]['content'])
-
+    def test_no_gameplay_changes(self):
+        posts = [{'title': 'Hotfix 2.3.1', 'url': 'https://x', 'contents': '[list][*]Fixed a crash[/list]'}]
+        self.assertTrue(patch_notes.describe(posts, 1).endswith('\nNo gameplay changes stood out; see the notes for details.'))
 
 if __name__ == '__main__':
     unittest.main()

@@ -104,7 +104,7 @@ class AutoUpdater:
         if not posts:
             log.info('Build %s has no new patch notes on Steam yet', build)
             return  # Steam often posts the notes a little after the build; try again next check
-        await self.notify(await patch_notes.describe(posts, build))
+        await self.notify(patch_notes.describe(posts, build))
         self.save_state(build, posts[-1]['date'])
 
     async def run(self):

@@ -129,11 +129,10 @@ missions, and anything that touches saves. Bug fixes and polish are left out. It
 Steam has the notes, and remembers the last build it posted about in `data/auto_update.json`, so
 the first run after setup only records the current build.
 
-For a proper summary, set `ANTHROPIC_API_KEY` in `.env` to an API key from
-[console.anthropic.com](https://console.anthropic.com/) (`pip install -r requirements.txt` again
-to get the `anthropic` package). Compabot then asks Claude to pick out what matters; a weekly
-summary costs a few cents. Without a key, it lists the notes' "Added", "Changed", "Increased"
-and similar lines instead, which is rougher and can miss things.
+The list comes straight from the notes: list items that mention creatures, taming, farming,
+items, recipes, resources, survival stats, missions and the like come first, then other
+"Added", "Changed", "Increased" lines, up to 12. Sections about bug fixes, UI, audio and
+performance are skipped. Follow the post link for the full notes.
 
 ## Start automatically after restarts
 
