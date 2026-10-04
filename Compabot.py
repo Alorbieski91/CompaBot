@@ -31,7 +31,8 @@ class CompaBot(commands.Bot):
         self.store = None
         self.server = ServerControl(server_admins, scripts_dir)
         self.update_channel_id = update_channel_id
-        self.updater = AutoUpdater(self.server, self.announce, update_hours) if update_hours > 0 else None
+        self.updater = AutoUpdater(self.server, self.announce, update_hours,
+                                   state_file=BASE / 'data' / 'auto_update.json') if update_hours > 0 else None
         self.update_task = None
 
     async def setup_hook(self):

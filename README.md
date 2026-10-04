@@ -120,6 +120,21 @@ channel > Copy Channel ID) to have Compabot post there when an update is waiting
 has installed one. Without it, these messages only go to the log. Set `AUTO_UPDATE_HOURS`
 to change how often it checks, or to `0` to turn automatic updates off.
 
+#### What changed in the game
+
+When the server's build changes (by the automatic update or by hand), Compabot also posts the
+gameplay changes from the new "Week N Update" and hotfix posts on Steam: new or changed creature
+behaviour (like Kiwis laying eggs), taming and farming, new items and recipes, balance changes,
+missions, and anything that touches saves. Bug fixes and polish are left out. It waits until
+Steam has the notes, and remembers the last build it posted about in `data/auto_update.json`, so
+the first run after setup only records the current build.
+
+For a proper summary, set `ANTHROPIC_API_KEY` in `.env` to an API key from
+[console.anthropic.com](https://console.anthropic.com/) (`pip install -r requirements.txt` again
+to get the `anthropic` package). Compabot then asks Claude to pick out what matters; a weekly
+summary costs a few cents. Without a key, it lists the notes' "Added", "Changed", "Increased"
+and similar lines instead, which is rougher and can miss things.
+
 ## Start automatically after restarts
 
 Windows Update restarts the PC often. To have Compabot start every time you sign in, and
@@ -161,4 +176,4 @@ local environments are ignored by Git. Only one bot process should use the datab
 ```
 
 `Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, and `auto_update.py` installs game updates on a schedule. No external database or paid service is needed.
+`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, and `auto_update.py` installs game updates on a schedule, and `patch_notes.py` summarizes the patch notes. No external database or paid service is needed.
