@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,9 +10,17 @@ from unittest.mock import AsyncMock
 
 from Compabot import create_bot
 from mod_update import ModError
-from server_control import SCRIPTS, ServerControl, install_server_commands, read_config, run_process
+from server_control import SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
 
 ADMIN = 2
+# Trimmed from a real Icarus.log: two players join, then both leave.
+PLAYING = ('[1]LogNet: NotifyAcceptingConnection accepted from: 1:17777\n'
+           '[1]LogNet: Login request: ?password=x?Name=nscript userId: Steam:UNKNOWN [0x1] platform: Steam\n'
+           '[1]LogNet: Join succeeded: nscript\n'
+           '[2]LogNet: NotifyAcceptingConnection accepted from: 2:17777\n'
+           '[2]LogNet: Join succeeded: Legiterately\n')
+LEFT = ('[3]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 1:17777, Name: SteamNetConnection_1, Driver: x\n'
+        '[4]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 2:17777, Name: SteamNetConnection_2, Driver: x\n')
 
 
 class FakeRunner:
@@ -226,6 +235,43 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
             await self.command('status').callback(interaction)
             self.assertIn('still loading, not accepting players on port 17777 yet', self.sent(interaction))
 
+    def write_backup(self, age):
+        backups = Path(self.folder.name) / 'backups'
+        backups.mkdir(exist_ok=True)
+        stamp = time.time() - age
+        (backups / 'Icarus-1.zip').write_text('')
+        os.utime(backups / 'Icarus-1.zip', (stamp, stamp))
+
+    async def test_auto_backup_runs_hourly_while_someone_plays(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        self.write_log(PLAYING, time.time())
+        self.write_backup(age=61 * 60)
+        await self.bot.auto_backup()
+        self.assertEqual([Path(argv[argv.index('-File') + 1]).name for argv, _ in self.runner.calls],
+                         ['Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
+
+    async def test_auto_backup_skips(self):
+        cases = (('server is offline', '{"running":false}', PLAYING, 2 * 60 * 60),
+                 ('nobody is playing', '{"running":true,"started":1790000000}', PLAYING + LEFT, 2 * 60 * 60),
+                 ('a recent backup exists', '{"running":true,"started":1790000000}', PLAYING, 10 * 60))
+        for reason, status, log_text, age in cases:
+            self.runner.calls.clear()
+            self.runner.result = (0, status)
+            self.write_log(log_text, time.time())
+            self.write_backup(age)
+            self.assertEqual(await self.bot.server.auto_backup(), reason)
+            self.assertEqual(len(self.runner.calls), 1)
+
+    async def test_auto_backup_waits_for_other_actions(self):
+        self.bot.server.busy = 'stop'
+        self.assertEqual(await self.bot.server.auto_backup(), 'Stop is running')
+        self.assertEqual(self.runner.calls, [])
+
+    async def test_auto_backup_ignores_players_in_an_old_log(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        self.write_log(PLAYING, 1_700_000_000)
+        self.assertEqual(await self.bot.server.auto_backup(), 'nobody is playing')
+
     async def test_status_offline_without_backups(self):
         self.runner.result = (0, '{"running":false}')
         interaction = self.interaction()
@@ -249,6 +295,14 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HelperTests(unittest.IsolatedAsyncioTestCase):
+    def test_players_online(self):
+        self.assertEqual(players_online(PLAYING), ['Legiterately', 'nscript'])
+        self.assertEqual(players_online(PLAYING + LEFT), [])
+        refused = ('[1]LogNet: NotifyAcceptingConnection accepted from: 3:17777\n'
+                   '[1]LogNet: Login request: ?Name=stranger userId: Steam:UNKNOWN\n'
+                   '[1]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 3:17777, Name: SteamNetConnection_3\n')
+        self.assertEqual(players_online(PLAYING + refused), ['Legiterately', 'nscript'])
+
     def test_config_defaults(self):
         self.assertEqual(read_config('/missing/config.psd1'), {})
         control = ServerControl([], '/srv/IcarusServer/scripts')

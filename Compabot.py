@@ -4,11 +4,11 @@ import time
 from pathlib import Path
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from features import install_features
-from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, install_server_commands
+from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, install_server_commands
 from storage import Store
 
 BASE = Path(__file__).resolve().parent
@@ -32,6 +32,8 @@ class CompaBot(commands.Bot):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
         install_features(self)
         install_server_commands(self, self.server)
+        if self.server.windows:
+            self.auto_backup.start()
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -39,7 +41,25 @@ class CompaBot(commands.Bot):
         else:
             await self.tree.sync()
 
+    @tasks.loop(minutes=5)
+    async def auto_backup(self):
+        """Hourly backups while someone is on the Icarus server."""
+        try:
+            result = await self.server.auto_backup()
+        except ServerError as error:
+            log.warning('Scheduled backup skipped: %s', error)
+            return
+        except Exception:  # keep the loop alive; the next check tries again
+            log.exception('Scheduled backup check failed')
+            return
+        if isinstance(result, str):
+            log.debug('Scheduled backup skipped: %s', result)
+        elif result[0] not in (0, None):
+            # Retried at the next check, since the newest backup is still old.
+            log.warning('Scheduled backup failed (exit code %s)', result[0])
+
     async def close(self):
+        self.auto_backup.cancel()
         try:
             await super().close()
         finally:

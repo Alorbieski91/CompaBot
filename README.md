@@ -74,6 +74,13 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 | `/server update` | Back up and update through SteamCMD, then update the mods (below). The server must be stopped first. |
 | `/server mods` | Update the mods only. The server must be stopped first. |
 
+While someone is playing, Compabot also backs the world up every hour on its own. Every five
+minutes it reads the server log to see who is connected, and backs up only if the newest backup
+(from any source, including `/server start`, `/server stop`, and `/server backup`) is at least an
+hour old, so it never doubles up on a recent one. It waits if another action is running, retries
+at the next check if a backup fails, and writes what it did to the bot log. The backup script
+still deletes backups older than 14 days.
+
 Only one start, stop, backup, update, or mod update runs at a time. Results are posted in the channel
 with the script's output. If a script takes longer than 14 minutes, Compabot says it is
 still running and lets it finish; use `/server status` to check on it.
