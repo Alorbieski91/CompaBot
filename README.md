@@ -99,6 +99,27 @@ installs a mod made for a newer game than the server has. Other mods are left al
 Your own game client needs the same mod file in its own `Content\Paks\mods` folder.
 
 
+### Automatic game updates
+
+While Compabot runs, it checks for an Icarus server update every 2 hours (and a minute after
+it starts) by asking SteamCMD for the latest public build and comparing it with the build in
+`server\steamapps\appmanifest_2089300.acf`. When Steam has a newer build:
+
+- If the server is stopped, it updates the game and mods, and leaves the server stopped.
+- If the server is running with nobody connected, it stops it (with a final backup), updates
+  the game and mods, and starts it again.
+- If someone is connected (read from the server log), it waits, checks again every 15
+  minutes, and installs the update once everyone has left.
+
+The update script backs up the saves before SteamCMD runs, as with `/server update`. If the
+update fails, Compabot still starts the server again (if it was running) and tries the update
+at the next check. It skips a check while a `/server` command is running.
+
+Set `AUTO_UPDATE_CHANNEL_ID` in `.env` to a channel ID (Developer Mode > right-click the
+channel > Copy Channel ID) to have Compabot post there when an update is waiting and when it
+has installed one. Without it, these messages only go to the log. Set `AUTO_UPDATE_HOURS`
+to change how often it checks, or to `0` to turn automatic updates off.
+
 ## Start automatically after restarts
 
 Windows Update restarts the PC often. To have Compabot start every time you sign in, and
@@ -140,4 +161,4 @@ local environments are ignored by Git. Only one bot process should use the datab
 ```
 
 `Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite, `server_control.py` defines `/server`, and `mod_update.py` updates mods. No external database or paid service is needed.
+`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, and `auto_update.py` installs game updates on a schedule. No external database or paid service is needed.

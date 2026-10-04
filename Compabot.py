@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -7,15 +8,17 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from auto_update import AutoUpdater
 from features import install_features
-from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, install_server_commands
+from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit, install_server_commands
 from storage import Store
 
 BASE = Path(__file__).resolve().parent
 log = logging.getLogger('compabot')
 
 class CompaBot(commands.Bot):
-    def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR):
+    def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR,
+                 update_hours=0, update_channel_id=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -27,6 +30,9 @@ class CompaBot(commands.Bot):
         self.greetings = {}
         self.store = None
         self.server = ServerControl(server_admins, scripts_dir)
+        self.update_channel_id = update_channel_id
+        self.updater = AutoUpdater(self.server, self.announce, update_hours) if update_hours > 0 else None
+        self.update_task = None
 
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
@@ -34,6 +40,8 @@ class CompaBot(commands.Bot):
         install_server_commands(self, self.server)
         if self.server.windows:
             self.auto_backup.start()
+        if self.updater and self.server.windows and self.server.scripts_dir.is_dir():
+            self.update_task = asyncio.create_task(self.updater.run())
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -60,12 +68,26 @@ class CompaBot(commands.Bot):
 
     async def close(self):
         self.auto_backup.cancel()
+        if self.update_task:
+            self.update_task.cancel()
         try:
             await super().close()
         finally:
             if self.store:
                 self.store.close()
                 self.store = None
+
+    async def announce(self, text):
+        """Post an automatic update message in AUTO_UPDATE_CHANNEL_ID, if set."""
+        log.info('%s', text)
+        if not self.update_channel_id:
+            return
+        await self.wait_until_ready()
+        try:
+            channel = self.get_channel(self.update_channel_id) or await self.fetch_channel(self.update_channel_id)
+            await channel.send(fit(text))
+        except discord.HTTPException:
+            log.exception('Could not post in channel %s', self.update_channel_id)
 
     async def on_ready(self):
         log.info('Logged in as %s (%s)', self.user, self.user.id)
@@ -106,8 +128,8 @@ class CompaBot(commands.Bot):
         await ctx.send(text, ephemeral=ctx.interaction is not None)
 
 
-def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR):
-    bot = CompaBot(guild_id, server_admins, scripts_dir)
+def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None):
+    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -134,4 +156,13 @@ if __name__ == '__main__':
     if not all(part.isdecimal() for part in raw_admins):
         raise SystemExit('SERVER_ADMIN_IDS must be comma-separated numeric Discord user IDs, or blank.')
     scripts_dir = os.getenv('ICARUS_SCRIPTS_DIR', '').strip() or DEFAULT_SCRIPTS_DIR
-    create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir).run(token)
+    raw_hours = os.getenv('AUTO_UPDATE_HOURS', '').strip() or '2'
+    try:
+        update_hours = float(raw_hours)
+    except ValueError:
+        raise SystemExit('AUTO_UPDATE_HOURS must be a number of hours, or 0 to turn automatic updates off.') from None
+    raw_channel = os.getenv('AUTO_UPDATE_CHANNEL_ID', '').strip()
+    if raw_channel and not raw_channel.isdecimal():
+        raise SystemExit('AUTO_UPDATE_CHANNEL_ID must be a numeric Discord channel ID, or blank.')
+    create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir,
+               update_hours, int(raw_channel) if raw_channel else None).run(token)
