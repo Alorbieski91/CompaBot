@@ -23,6 +23,13 @@ LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Updat
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
 STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
+# While someone is playing, back up whenever the newest backup (from any source) is this old.
+AUTO_BACKUP_AGE = 60 * 60
+# Server log lines that track who is connected. A join is logged with the player's name only,
+# so it is matched to the address from the connection accepted just before it.
+ACCEPTED = re.compile(r'NotifyAcceptingConnection accepted from: (\S+)')
+JOINED = re.compile(r'Join succeeded: (.+)')
+CLOSED = re.compile(r'UNetConnection::Close: \[UNetConnection\] RemoteAddr: ([^,\s]+)')
 
 
 class ServerError(Exception):
@@ -126,19 +133,52 @@ class ServerControl:
         return state
 
 
+    def current_log(self, started):
+        """The server log text, or '' if it is missing or left over from an earlier run."""
+        log_file = self.install_root / 'data' / 'Saved' / 'Logs' / 'Icarus.log'
+        try:
+            if log_file.stat().st_mtime < started:
+                return ''
+            return log_file.read_bytes().decode('utf-8', 'replace')
+        except OSError:
+            return ''
+
     def listening(self, started):
         """Whether the current server log says the game port is accepting players.
 
         Icarus uses Steam networking, so the game port never appears as a normal
         Windows UDP endpoint; the log line is the reliable signal.
         """
-        log_file = self.install_root / 'data' / 'Saved' / 'Logs' / 'Icarus.log'
-        try:
-            if log_file.stat().st_mtime < started:
-                return False
-            return f'listening on port {self.port}'.encode() in log_file.read_bytes()
-        except OSError:
-            return False
+        return f'listening on port {self.port}' in self.current_log(started)
+
+    async def auto_backup(self):
+        """Back up if someone is playing and the newest backup is at least AUTO_BACKUP_AGE old.
+
+        Returns a short reason when it skips, or the backup's (exit code, output).
+        """
+        if self.busy:
+            return f'{LABELS[self.busy]} is running'
+        state = await self.status()
+        if not state['running']:
+            return 'server is offline'
+        if not players_online(self.current_log(state['started'])):
+            return 'nobody is playing'
+        if state['backup'] and time.time() - state['backup'] < AUTO_BACKUP_AGE:
+            return 'a recent backup exists'
+        return await self.run_action('backup')
+
+
+def players_online(log_text):
+    """Names of the players the server log says are connected right now."""
+    online, address = {}, None
+    for line in log_text.splitlines():
+        if match := ACCEPTED.search(line):
+            address = match[1]
+        elif (match := JOINED.search(line)) and address:
+            online[address] = match[1].strip()
+        elif match := CLOSED.search(line):
+            online.pop(match[1], None)
+    return sorted(online.values())
 
 
 def tail(text, limit=1500):
