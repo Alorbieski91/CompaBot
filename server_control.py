@@ -101,6 +101,16 @@ class ServerControl:
         else:
             log.info('%s exited with %s:\n%s', action, *task.result())
 
+    async def update_with_mods(self, window=None):
+        """Update the game, then its mods if that worked. Returns (update exit code, report)."""
+        code, output = await self.run_action('update', window=window)
+        text = report('Update', code, output)
+        if code == 0:
+            text = mod_report(text, await self.update_mods())
+        elif code is None:
+            text += ' Then run `/server mods` to update the mods.'
+        return code, text
+
     async def update_mods(self):
         """Bring installed mods up to the latest release. Returns lines to report."""
         if self.busy:
@@ -240,16 +250,6 @@ def install_server_commands(bot, control):
             text = str(error)
         await interaction.followup.send(text)
 
-    async def update_with_mods():
-        """Update the game, then its mods if that worked. Returns (update exit code, report)."""
-        code, output = await control.run_action('update')
-        text = report('Update', code, output)
-        if code == 0:
-            text = mod_report(text, await control.update_mods())
-        elif code is None:
-            text += ' Then run `/server mods` to update the mods.'
-        return code, text
-
     @server.command(name='status', description='Show whether the Icarus server is running and when it was last backed up.')
     async def status(interaction: discord.Interaction):
         if not await allowed(interaction):
@@ -271,7 +271,7 @@ def install_server_commands(bot, control):
         await interaction.response.defer(thinking=True)
         began = time.monotonic()
         try:
-            code, text = await update_with_mods()
+            code, text = await control.update_with_mods()
             if code == 0:
                 # Start after the mods are swapped, within what is left of the reply window.
                 window = max(1, control.reply_window - (time.monotonic() - began))
@@ -298,7 +298,7 @@ def install_server_commands(bot, control):
             return
         await interaction.response.defer(thinking=True)
         try:
-            text = (await update_with_mods())[1]
+            text = (await control.update_with_mods())[1]
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(text)
