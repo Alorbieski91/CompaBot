@@ -19,7 +19,7 @@ from pathlib import Path
 
 import patch_notes
 
-from server_control import ServerError, players_online, report
+from server_control import ServerError, report
 
 log = logging.getLogger('compabot.autoupdate')
 
@@ -138,12 +138,14 @@ class AutoUpdater:
         try:
             state = await control.status()
             if state['running']:
-                players = players_online(control.current_log(state['started']))
-                if players:
+                players = state['players']
+                if players.players:
                     if self.announced != latest:
                         self.announced = latest
+                        who = (f'{" and ".join(players.names)} {"has" if len(players.names) == 1 else "have"}' if players.names
+                               else f'{players.players} {"player has" if players.players == 1 else "players have"}')
                         await self.notify(f'An Icarus update is out (build {installed} to {latest}). '
-                                          f'I will install it once {" and ".join(players)} {"has" if len(players) == 1 else "have"} left the server.')
+                                          f'I will install it once {who} left the server.')
                     return WHILE_PLAYING
                 code, output = await control.run_action('stop', window=SCRIPT_WINDOW)
                 if code != 0:

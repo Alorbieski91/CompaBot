@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 
 from mod_update import ModError, ModUpdater
+from steam_query import Info, query_info
 
 log = logging.getLogger('compabot.server')
 
@@ -68,9 +69,13 @@ class ServerControl:
         self.install_root = Path(config.get('InstallRoot') or self.scripts_dir.parent)
         self.name = config.get('ServerName', 'Icarus server')
         self.port = config.get('GamePort', '17777')
+        self.query_port = int(config.get('QueryPort', '27015'))
+        self.max_players = int(config.get('MaxPlayers', '2'))
         self.run = run
+        self.query = query_info
         self.windows = os.name == 'nt'
         self.busy = None
+        self.stopped_at = float('-inf')
         self.reply_window = REPLY_WINDOW
         self.mods = ModUpdater(self.install_root)
 
@@ -85,6 +90,8 @@ class ServerControl:
         if self.busy:
             raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
         self.busy = action
+        if action == 'stop':
+            self.stopped_at = time.time()
         task = asyncio.ensure_future(self.powershell('-File', str(script), *args))
         task.add_done_callback(lambda t: self._finished(action, t))
         try:
@@ -138,6 +145,7 @@ class ServerControl:
             raise ServerError(f'Status check returned something unexpected:\n{tail(out)}') from None
         if state['running']:
             state['ready'] = self.listening(state['started'])
+            state['players'] = await self.players(state['started'])
         backups = list((self.install_root / 'backups').glob('Icarus-*.zip'))
         state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
         return state
@@ -152,6 +160,14 @@ class ServerControl:
             return log_file.read_bytes().decode('utf-8', 'replace')
         except OSError:
             return ''
+
+    async def players(self, started):
+        """Who is on: the count from the Steam query port, else the names from the server log."""
+        info = await asyncio.to_thread(self.query, self.query_port)
+        if info:
+            return info
+        names = players_online(self.current_log(started))
+        return Info(len(names), self.max_players, tuple(names))
 
     def listening(self, started):
         """Whether the current server log says the game port is accepting players.
@@ -171,7 +187,7 @@ class ServerControl:
         state = await self.status()
         if not state['running']:
             return 'server is offline'
-        if not players_online(self.current_log(state['started'])):
+        if not state['players'].players:
             return 'nobody is playing'
         if state['backup'] and time.time() - state['backup'] < AUTO_BACKUP_AGE:
             return 'a recent backup exists'
@@ -222,6 +238,9 @@ def describe(control, state):
     else:
         ready = 'ready for players on port {}' if state.get('ready') else 'still loading, not accepting players on port {} yet'
         lines.append(f"**{control.name}** is online since <t:{state['started']}:R> ({ready.format(control.port)}).")
+        players = state['players']
+        names = f" ({', '.join(players.names)})" if players.names else ''
+        lines.append(f'Players: {players.players}/{players.max_players}{names}.')
     if control.busy:
         lines.append(f'{LABELS[control.busy]} is running right now.')
     lines.append(f"Last backup: <t:{state['backup']}:R>." if state['backup'] else 'No backups found.')

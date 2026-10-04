@@ -67,7 +67,7 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 
 | Command | Behavior |
 | --- | --- |
-| `/server status` | Whether the server is running, since when, whether it is ready for players on port 17777 (read from the server log), and the last backup time. |
+| `/server status` | Whether the server is running, since when, whether it is ready for players on port 17777 (read from the server log), how many players are on, and the last backup time. |
 | `/server start update:False` | Back up and start the server. `update:True` runs `/server update` (game and mods) first, and starts only if it worked. |
 | `/server stop` | Close the server window normally, wait up to 30 seconds, then take a final backup. |
 | `/server backup` | Zip the save folder into `backups` now. |
@@ -75,7 +75,8 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 | `/server mods` | Update the mods only. The server must be stopped first. |
 
 While someone is playing, Compabot also backs the world up every hour on its own. Every five
-minutes it reads the server log to see who is connected, and backs up only if the newest backup
+minutes it checks who is connected (from the Steam query port, or the server log if that does
+not answer), and backs up only if the newest backup
 (from any source, including `/server start`, `/server stop`, and `/server backup`) is at least an
 hour old, so it never doubles up on a recent one. It waits if another action is running, retries
 at the next check if a backup fails, and writes what it did to the bot log. The backup script
@@ -84,6 +85,24 @@ still deletes backups older than 14 days.
 Only one start, stop, backup, update, or mod update runs at a time. Results are posted in the channel
 with the script's output. If a script takes longer than 14 minutes, Compabot says it is
 still running and lets it finish; use `/server status` to check on it.
+
+### Down and crash alerts
+
+Set `ALERT_CHANNEL_ID` in `.env` to a channel ID (right-click the channel > Copy Channel ID) to
+have Compabot watch the server. Every minute it asks the server's Steam query port (27015,
+`QueryPort` in `config.psd1`) for its player count, and checks the server process when that
+gets no answer. It posts in that channel when:
+
+- the server crashes: with the error from the crash report, and the newest report from
+  `data\Saved\Crashes` (log, crash details, and minidump) attached as a zip;
+- the server closes without a crash report, for example when it is closed on the PC;
+- the server is still running but has stopped answering, which usually means it is frozen;
+- the server is back and ready for players, with the player count.
+
+A change has to be seen on two checks in a row before it is posted, so alerts arrive one to two
+minutes after the fact. `/server stop` is not announced as an outage, and nothing is posted
+for whatever state the server is in when Compabot starts. The bot needs **Attach Files** in
+that channel, in addition to the permissions listed in Setup.
 
 ### Mods
 
@@ -108,7 +127,7 @@ it starts) by asking SteamCMD for the latest public build and comparing it with 
 - If the server is stopped, it updates the game and mods, and leaves the server stopped.
 - If the server is running with nobody connected, it stops it (with a final backup), updates
   the game and mods, and starts it again.
-- If someone is connected (read from the server log), it waits, checks again every 15
+- If someone is connected (the same check as the hourly backups), it waits, checks again every 15
   minutes, and installs the update once everyone has left.
 
 The update script backs up the saves before SteamCMD runs, as with `/server update`. If the
@@ -175,4 +194,5 @@ local environments are ignored by Git. Only one bot process should use the datab
 ```
 
 `Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, and `auto_update.py` installs game updates on a schedule, and `patch_notes.py` summarizes the patch notes. No external database or paid service is needed.
+`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, `auto_update.py` installs game updates on a schedule,
+`patch_notes.py` summarizes the patch notes, `monitor.py` posts the server alerts, and `steam_query.py` reads the player count. No external database or paid service is needed.

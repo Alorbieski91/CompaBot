@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 from Compabot import create_bot
 from mod_update import ModError
 from server_control import SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
+from steam_query import Info
 
 ADMIN = 2
 # Trimmed from a real Icarus.log: two players join, then both leave.
@@ -50,6 +51,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts)
         self.bot.server.run = self.runner
         self.bot.server.windows = True
+        self.bot.server.query = lambda port: None
         install_server_commands(self.bot, self.bot.server)
 
     async def asyncTearDown(self):
@@ -208,6 +210,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.write_log('LogNet: GameNetDriver SteamNetDriver_1 IpNetDriver listening on port 17777\n', 1_790_000_100)
         self.runner.result = (0, '#< CLIXML\r\n{"running":true,"started":1790000000}\r\n'
                                  '<Objs Version="1.1.0.1"><Obj S="progress" RefId="0"></Obj></Objs>\r\n')
+        self.bot.server.query = lambda port: Info(1, 2) if port == 27015 else None
         interaction = self.interaction()
         await self.command('status').callback(interaction)
         argv, env = self.runner.calls[0]
@@ -218,6 +221,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(env, {'ICARUS_ROOT': self.folder.name})
         text = self.sent(interaction)
         self.assertIn('**CompaWorld** is online since <t:1790000000:R> (ready for players on port 17777)', text)
+        self.assertIn('Players: 1/2.', text)
         self.assertIn('Last backup: <t:1800000000:R>', text)
 
     def write_log(self, text, stamp):
@@ -225,6 +229,13 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         logs.mkdir(parents=True, exist_ok=True)
         (logs / 'Icarus.log').write_text(text)
         os.utime(logs / 'Icarus.log', (stamp, stamp))
+
+    async def test_status_reads_players_from_the_log_when_the_query_port_is_quiet(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        self.write_log('IpNetDriver listening on port 17777\n' + PLAYING, 1_790_000_100)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction)
+        self.assertIn('Players: 2/2 (Legiterately, nscript).', self.sent(interaction))
 
     async def test_status_still_loading(self):
         self.runner.result = (0, '{"running":true,"started":1790000000}')
