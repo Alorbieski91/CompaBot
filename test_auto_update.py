@@ -8,6 +8,7 @@ from pathlib import Path
 from auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
 import patch_notes
 from server_control import SCRIPTS, ServerControl
+from steam_query import Info
 
 APP_INFO = '''AppID : 2089300, change number : 31234567
 "2089300"
@@ -83,6 +84,7 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         apps.mkdir(parents=True)
         (apps / 'appmanifest_2089300.acf').write_text('"buildid"\t\t"20300000"\n')
         self.control = ServerControl([], scripts)
+        self.control.query = lambda port: None
         self.control.mods.update = lambda: ['laanp-PetesBeaconTeleport: w252 v1 is the latest release.']
         self.messages = []
         self.queries = []
@@ -150,6 +152,13 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.use(running=True)
         await self.updater.check()
         self.assertIn('once Legiterately and nscript have left', self.messages[0])
+
+    async def test_counts_players_from_the_query_port(self):
+        self.write_log('')
+        self.control.query = lambda port: Info(2, 2)
+        self.use(running=True)
+        self.assertEqual(await self.updater.check(), WHILE_PLAYING)
+        self.assertIn('once 2 players have left', self.messages[0])
 
     async def test_failed_stop_leaves_the_server_alone(self):
         self.write_log('')

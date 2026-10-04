@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from auto_update import AutoUpdater
 from features import install_features
+from monitor import install_monitor
 from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit, install_server_commands
 from storage import Store
 
@@ -18,7 +19,7 @@ log = logging.getLogger('compabot')
 
 class CompaBot(commands.Bot):
     def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR,
-                 update_hours=0, update_channel_id=None):
+                 update_hours=0, update_channel_id=None, alert_channel_id=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -34,6 +35,7 @@ class CompaBot(commands.Bot):
         self.updater = AutoUpdater(self.server, self.announce, update_hours,
                                    state_file=BASE / 'data' / 'auto_update.json') if update_hours > 0 else None
         self.update_task = None
+        self.alert_channel_id = alert_channel_id
 
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
@@ -41,6 +43,8 @@ class CompaBot(commands.Bot):
         install_server_commands(self, self.server)
         if self.server.windows:
             self.auto_backup.start()
+            if self.alert_channel_id:
+                install_monitor(self, self.server, self.alert_channel_id)
         if self.updater and self.server.windows and self.server.scripts_dir.is_dir():
             self.update_task = asyncio.create_task(self.updater.run())
         if self.guild_id:
@@ -129,8 +133,9 @@ class CompaBot(commands.Bot):
         await ctx.send(text, ephemeral=ctx.interaction is not None)
 
 
-def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None):
-    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id)
+def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None,
+               alert_channel_id=None):
+    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -156,6 +161,9 @@ if __name__ == '__main__':
     raw_admins = [part.strip() for part in os.getenv('SERVER_ADMIN_IDS', '').split(',') if part.strip()]
     if not all(part.isdecimal() for part in raw_admins):
         raise SystemExit('SERVER_ADMIN_IDS must be comma-separated numeric Discord user IDs, or blank.')
+    raw_alerts = os.getenv('ALERT_CHANNEL_ID', '').strip()
+    if raw_alerts and (not raw_alerts.isdecimal() or int(raw_alerts) <= 0):
+        raise SystemExit('ALERT_CHANNEL_ID must be a numeric Discord channel ID, or blank.')
     scripts_dir = os.getenv('ICARUS_SCRIPTS_DIR', '').strip() or DEFAULT_SCRIPTS_DIR
     raw_hours = os.getenv('AUTO_UPDATE_HOURS', '').strip() or '2'
     try:
@@ -166,4 +174,5 @@ if __name__ == '__main__':
     if raw_channel and not raw_channel.isdecimal():
         raise SystemExit('AUTO_UPDATE_CHANNEL_ID must be a numeric Discord channel ID, or blank.')
     create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir,
-               update_hours, int(raw_channel) if raw_channel else None).run(token)
+               update_hours, int(raw_channel) if raw_channel else None,
+               int(raw_alerts) if raw_alerts else None).run(token)
