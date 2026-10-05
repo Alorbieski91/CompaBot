@@ -3,11 +3,13 @@ import logging
 import os
 import time
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from active_hours import ActiveHours, parse_time
 from auto_update import AutoUpdater
 from features import install_features
 from monitor import install_monitor
@@ -19,7 +21,7 @@ log = logging.getLogger('compabot')
 
 class CompaBot(commands.Bot):
     def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR,
-                 update_hours=0, update_channel_id=None, alert_channel_id=None):
+                 update_hours=0, update_channel_id=None, alert_channel_id=None, active_hours=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -36,6 +38,10 @@ class CompaBot(commands.Bot):
                                    state_file=BASE / 'data' / 'auto_update.json') if update_hours > 0 else None
         self.update_task = None
         self.alert_channel_id = alert_channel_id
+        # active_hours is (start time, stop time, zone); either time may be None to turn it off.
+        start, stop, zone = active_hours or (None, None, None)
+        self.schedule = ActiveHours(self.server, self.alert, start, stop, zone) if start or stop else None
+        self.schedule_task = None
 
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
@@ -47,6 +53,8 @@ class CompaBot(commands.Bot):
                 install_monitor(self, self.server, self.alert_channel_id)
         if self.updater and self.server.windows and self.server.scripts_dir.is_dir():
             self.update_task = asyncio.create_task(self.updater.run())
+        if self.schedule and self.server.windows and self.server.scripts_dir.is_dir():
+            self.schedule_task = asyncio.create_task(self.schedule.run())
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -73,8 +81,9 @@ class CompaBot(commands.Bot):
 
     async def close(self):
         self.auto_backup.cancel()
-        if self.update_task:
-            self.update_task.cancel()
+        for task in (self.update_task, self.schedule_task):
+            if task:
+                task.cancel()
         try:
             await super().close()
         finally:
@@ -84,15 +93,22 @@ class CompaBot(commands.Bot):
 
     async def announce(self, text):
         """Post an automatic update message in AUTO_UPDATE_CHANNEL_ID, if set."""
+        await self.post(self.update_channel_id, text)
+
+    async def alert(self, text):
+        """Post a scheduled start/stop message in ALERT_CHANNEL_ID, if set."""
+        await self.post(self.alert_channel_id, text)
+
+    async def post(self, channel_id, text):
         log.info('%s', text)
-        if not self.update_channel_id:
+        if not channel_id:
             return
         await self.wait_until_ready()
         try:
-            channel = self.get_channel(self.update_channel_id) or await self.fetch_channel(self.update_channel_id)
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
             await channel.send(fit(text))
         except discord.HTTPException:
-            log.exception('Could not post in channel %s', self.update_channel_id)
+            log.exception('Could not post in channel %s', channel_id)
 
     async def on_ready(self):
         log.info('Logged in as %s (%s)', self.user, self.user.id)
@@ -134,8 +150,8 @@ class CompaBot(commands.Bot):
 
 
 def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None,
-               alert_channel_id=None):
-    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id)
+               alert_channel_id=None, active_hours=None):
+    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id, active_hours)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -173,6 +189,21 @@ if __name__ == '__main__':
     raw_channel = os.getenv('AUTO_UPDATE_CHANNEL_ID', '').strip()
     if raw_channel and not raw_channel.isdecimal():
         raise SystemExit('AUTO_UPDATE_CHANNEL_ID must be a numeric Discord channel ID, or blank.')
+    times = {}
+    for key, default in (('SERVER_START_TIME', '06:00'), ('SERVER_STOP_TIME', '20:00')):
+        try:
+            times[key] = parse_time(os.getenv(key, '').strip() or default)
+        except ValueError:
+            raise SystemExit(f'{key} must be a 24-hour time like {default}, or off.') from None
+    zone_name = os.getenv('SERVER_TIMEZONE', '').strip() or 'America/Chicago'
+    try:
+        zone = ZoneInfo(zone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        # Windows has no time zone data of its own; keep the bot up rather than fail on a missed pip install.
+        log.error('Scheduled start/stop is off: unknown time zone %r. Check SERVER_TIMEZONE and run '
+                  'pip install -r requirements.txt.', zone_name)
+        times, zone = {'SERVER_START_TIME': None, 'SERVER_STOP_TIME': None}, None
     create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir,
                update_hours, int(raw_channel) if raw_channel else None,
-               int(raw_alerts) if raw_alerts else None).run(token)
+               int(raw_alerts) if raw_alerts else None,
+               (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone)).run(token)
