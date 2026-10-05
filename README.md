@@ -153,6 +153,27 @@ items, recipes, resources, survival stats, missions and the like come first, the
 "Added", "Changed", "Increased" lines, up to 12. Sections about bug fixes, UI, audio and
 performance are skipped. Follow the post link for the full notes.
 
+### Active hours
+
+Compabot keeps the server to the hours you play, in US Central time:
+
+- At 8:00 PM, if nobody is on, it stops the server (with the usual final backup). If someone
+  is on, the server is left running for the night.
+- At 6:00 AM, it starts the server if it is off. If it is still running with nobody on (it was
+  started by hand after 8:00 PM, or someone was on at 8:00 PM), it restarts it to refresh it.
+  If someone is playing at 6:00 AM, it is left alone.
+
+Each of these is posted in `ALERT_CHANNEL_ID` (the 6:00 AM start or restart, the 8:00 PM
+shutdown, and anything that failed). The usual "back online" alert follows a minute or two after
+a start, and scheduled stops are not reported as outages. If another `/server` action is running
+at that time, or Compabot was restarting, it tries again every 30 seconds for up to an hour, then
+waits for the next day.
+
+Set `SERVER_START_TIME` and `SERVER_STOP_TIME` in `.env` to other 24-hour times (like `07:30`),
+or to `off` to turn either one off. `SERVER_TIMEZONE` defaults to `America/Chicago`, which follows
+daylight saving time. Run `pip install -r requirements.txt` again after updating, since Windows
+needs the `tzdata` package for time zones. Without it Compabot runs with the schedule off and says so in `logs\compabot.log`.
+
 ## Start automatically after restarts
 
 Windows Update restarts the PC often. To have Compabot start every time you sign in, and
@@ -194,5 +215,5 @@ local environments are ignored by Git. Only one bot process should use the datab
 ```
 
 `Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, `auto_update.py` installs game updates on a schedule,
+`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, `auto_update.py` installs game updates on a schedule, `active_hours.py` starts and stops the server at set times,
 `patch_notes.py` summarizes the patch notes, `monitor.py` posts the server alerts, and `steam_query.py` reads the player count. No external database or paid service is needed.
