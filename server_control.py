@@ -24,8 +24,9 @@ LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Updat
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
 STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
-# While someone is playing, back up whenever the newest backup (from any source) is this old.
-AUTO_BACKUP_AGE = 60 * 60
+# The running server keeps its save and log files open, so backups only run while it is off.
+RUNNING_BACKUP = ("{name} is running, and its save files can't be backed up while it has them open. "
+                  '`/server stop` backs it up as soon as it has closed.')
 # Server log lines that track who is connected. A join is logged with the player's name only,
 # so it is matched to the address from the connection accepted just before it.
 ACCEPTED = re.compile(r'NotifyAcceptingConnection accepted from: (\S+)')
@@ -89,6 +90,11 @@ class ServerControl:
             raise ServerError(f'Script not found: {script}')
         if self.busy:
             raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        if action == 'backup':
+            if (await self.status())['running']:
+                raise ServerError(RUNNING_BACKUP.format(name=f'**{self.name}**'))
+            if self.busy:  # another action started during the status check
+                raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
         self.busy = action
         if action == 'stop':
             self.stopped_at = time.time()
@@ -177,20 +183,29 @@ class ServerControl:
         """
         return f'listening on port {self.port}' in self.current_log(started)
 
-    async def auto_backup(self):
-        """Back up if someone is playing and the newest backup is at least AUTO_BACKUP_AGE old.
+    def newest_save(self):
+        """When the world save files last changed, or None if there are none."""
+        saves = self.install_root / 'data' / 'Saved' / 'PlayerData'
+        try:
+            return max((p.stat().st_mtime for p in saves.rglob('*') if p.is_file()), default=None)
+        except OSError:
+            return None
 
-        Returns a short reason when it skips, or the backup's (exit code, output).
+    async def auto_backup(self):
+        """Back up while the server is off, if the world has changed since the newest backup.
+
+        Stop, start, and update already back up with the server off; this catches the rest, such
+        as a crash or a server closed outside Compabot. Returns a short reason when it skips, or
+        the backup's (exit code, output).
         """
         if self.busy:
             return f'{LABELS[self.busy]} is running'
         state = await self.status()
-        if not state['running']:
-            return 'server is offline'
-        if not state['players'].players:
-            return 'nobody is playing'
-        if state['backup'] and time.time() - state['backup'] < AUTO_BACKUP_AGE:
-            return 'a recent backup exists'
+        if state['running']:
+            return 'server is running'
+        saved = self.newest_save()
+        if saved is None or (state['backup'] and state['backup'] >= saved):
+            return 'newest backup is up to date'
         return await self.run_action('backup')
 
 

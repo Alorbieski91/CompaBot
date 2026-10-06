@@ -64,7 +64,7 @@ class CompaBot(commands.Bot):
 
     @tasks.loop(minutes=5)
     async def auto_backup(self):
-        """Hourly backups while someone is on the Icarus server."""
+        """Back up the Icarus world while the server is off, if it changed since the last backup."""
         try:
             result = await self.server.auto_backup()
         except ServerError as error:
@@ -76,7 +76,7 @@ class CompaBot(commands.Bot):
         if isinstance(result, str):
             log.debug('Scheduled backup skipped: %s', result)
         elif result[0] not in (0, None):
-            # Retried at the next check, since the newest backup is still old.
+            # Retried at the next check, since the newest backup is still out of date.
             log.warning('Scheduled backup failed (exit code %s)', result[0])
 
     async def close(self):

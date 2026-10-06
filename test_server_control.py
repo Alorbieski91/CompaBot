@@ -124,6 +124,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('The server was not started.', self.sent(interaction))
 
     async def test_each_action_runs_its_script(self):
+        self.runner.result = (0, '{"running":false}')  # backup checks the server is off first
         for name in ('stop', 'backup', 'update'):
             await self.command(name).callback(self.interaction())
             self.assertEqual(self.runner.calls[-1][0][-1], str(self.scripts / SCRIPTS[name]))
@@ -253,35 +254,52 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         (backups / 'Icarus-1.zip').write_text('')
         os.utime(backups / 'Icarus-1.zip', (stamp, stamp))
 
-    async def test_auto_backup_runs_hourly_while_someone_plays(self):
-        self.runner.result = (0, '{"running":true,"started":1790000000}')
-        self.write_log(PLAYING, time.time())
-        self.write_backup(age=61 * 60)
+    def write_save(self, age):
+        prospects = Path(self.folder.name) / 'data' / 'Saved' / 'PlayerData' / 'DedicatedServer' / 'Prospects'
+        prospects.mkdir(parents=True, exist_ok=True)
+        stamp = time.time() - age
+        (prospects / 'ELMUNDOFOO.json').write_text('{}')
+        os.utime(prospects / 'ELMUNDOFOO.json', (stamp, stamp))
+
+    def scripts_run(self):
+        return [Path(argv[argv.index('-File') + 1]).name for argv, _ in self.runner.calls]
+
+    async def test_auto_backup_runs_when_offline_world_changed(self):
+        self.runner.result = (0, '{"running":false}')
+        self.write_backup(age=2 * 60 * 60)
+        self.write_save(age=60 * 60)  # e.g. the server crashed after the last backup
         await self.bot.auto_backup()
-        self.assertEqual([Path(argv[argv.index('-File') + 1]).name for argv, _ in self.runner.calls],
-                         ['Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
 
     async def test_auto_backup_skips(self):
-        cases = (('server is offline', '{"running":false}', PLAYING, 2 * 60 * 60),
-                 ('nobody is playing', '{"running":true,"started":1790000000}', PLAYING + LEFT, 2 * 60 * 60),
-                 ('a recent backup exists', '{"running":true,"started":1790000000}', PLAYING, 10 * 60))
-        for reason, status, log_text, age in cases:
+        running = '{"running":true,"started":1790000000}'
+        cases = (('server is running', running, 2 * 60 * 60, 60),
+                 ('newest backup is up to date', '{"running":false}', 60, 2 * 60 * 60))
+        for reason, status, backup_age, save_age in cases:
             self.runner.calls.clear()
             self.runner.result = (0, status)
-            self.write_log(log_text, time.time())
-            self.write_backup(age)
+            self.write_log(PLAYING, time.time())
+            self.write_backup(backup_age)
+            self.write_save(save_age)
             self.assertEqual(await self.bot.server.auto_backup(), reason)
-            self.assertEqual(len(self.runner.calls), 1)
+            self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1'])
+
+    async def test_auto_backup_skips_without_saves(self):
+        self.runner.result = (0, '{"running":false}')
+        self.assertEqual(await self.bot.server.auto_backup(), 'newest backup is up to date')
 
     async def test_auto_backup_waits_for_other_actions(self):
         self.bot.server.busy = 'stop'
         self.assertEqual(await self.bot.server.auto_backup(), 'Stop is running')
         self.assertEqual(self.runner.calls, [])
 
-    async def test_auto_backup_ignores_players_in_an_old_log(self):
+    async def test_backup_command_refuses_while_running(self):
         self.runner.result = (0, '{"running":true,"started":1790000000}')
-        self.write_log(PLAYING, 1_700_000_000)
-        self.assertEqual(await self.bot.server.auto_backup(), 'nobody is playing')
+        interaction = self.interaction()
+        await self.command('backup').callback(interaction)
+        self.assertIn("can't be backed up while it has them open", self.sent(interaction))
+        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1'])
+        self.assertIsNone(self.bot.server.busy)
 
     async def test_status_offline_without_backups(self):
         self.runner.result = (0, '{"running":false}')

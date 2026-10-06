@@ -70,17 +70,17 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 | `/server status` | Whether the server is running, since when, whether it is ready for players on port 17777 (read from the server log), how many players are on, and the last backup time. |
 | `/server start update:False` | Back up and start the server. `update:True` runs `/server update` (game and mods) first, and starts only if it worked. |
 | `/server stop` | Close the server window normally, wait up to 30 seconds, then take a final backup. |
-| `/server backup` | Zip the save folder into `backups` now. |
+| `/server backup` | Zip the save folder into `backups` now. The server must be stopped first. |
 | `/server update` | Back up and update through SteamCMD, then update the mods (below). The server must be stopped first. |
 | `/server mods` | Update the mods only. The server must be stopped first. |
 
-While someone is playing, Compabot also backs the world up every hour on its own. Every five
-minutes it checks who is connected (from the Steam query port, or the server log if that does
-not answer), and backs up only if the newest backup
-(from any source, including `/server start`, `/server stop`, and `/server backup`) is at least an
-hour old, so it never doubles up on a recent one. It waits if another action is running, retries
-at the next check if a backup fails, and writes what it did to the bot log. The backup script
-still deletes backups older than 14 days.
+Backups only run while the server is off, because the running server keeps its save and log
+files open. `/server stop`, `/server start`, `/server update`, and the scheduled stops and restarts
+already back up with the server off. Every five minutes Compabot also checks whether the server
+is off and the world has changed since the newest backup (for example after a crash, or after the
+server was closed outside Compabot), and backs it up if so. `/server backup` refuses while the
+server is running. A failed backup is retried at the next check and written to the bot log. The
+backup script still deletes backups older than 14 days.
 
 Only one start, stop, backup, update, or mod update runs at a time. Results are posted in the channel
 with the script's output. If a script takes longer than 14 minutes, Compabot says it is
@@ -127,7 +127,7 @@ it starts) by asking SteamCMD for the latest public build and comparing it with 
 - If the server is stopped, it updates the game and mods, and leaves the server stopped.
 - If the server is running with nobody connected, it stops it (with a final backup), updates
   the game and mods, and starts it again.
-- If someone is connected (the same check as the hourly backups), it waits, checks again every 15
+- If someone is connected (the same player check as `/server status`), it waits, checks again every 15
   minutes, and installs the update once everyone has left.
 
 The update script backs up the saves before SteamCMD runs, as with `/server update`. If the
