@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 
 import discord
 from discord import app_commands
@@ -32,6 +33,8 @@ RUNNING_BACKUP = ("{name} is running, and its save files can't be backed up whil
 ACCEPTED = re.compile(r'NotifyAcceptingConnection accepted from: (\S+)')
 JOINED = re.compile(r'Join succeeded: (.+)')
 CLOSED = re.compile(r'UNetConnection::Close: \[UNetConnection\] RemoteAddr: ([^,\s]+)')
+# Discord shows at most 25 autocomplete choices.
+MAX_CHOICES = 25
 
 
 class ServerError(Exception):
@@ -183,6 +186,51 @@ class ServerControl:
         """
         return f'listening on port {self.port}' in self.current_log(started)
 
+    @property
+    def prospects_dir(self):
+        return self.install_root / 'data' / 'Saved' / 'PlayerData' / 'DedicatedServer' / 'Prospects'
+
+    @property
+    def settings_file(self):
+        return self.install_root / 'data' / 'Saved' / 'Config' / 'WindowsServer' / 'ServerSettings.ini'
+
+    def prospects(self):
+        """Names of the saved prospects (worlds), from their .json save files."""
+        try:
+            return sorted((p.stem for p in self.prospects_dir.glob('*.json') if p.is_file()), key=str.lower)
+        except OSError:
+            return []
+
+    def saved_prospect(self, name):
+        """The saved prospect matching name, ignoring case. Never creates a new world."""
+        saved = {p.lower(): p for p in self.prospects()}
+        prospect = saved.get(name.strip().lower())
+        if not prospect:
+            known = ', '.join(f'`{p}`' for p in saved.values()) or 'none'
+            raise ServerError(f'There is no saved world called `{discord.utils.escape_markdown(name)}`. '
+                              f'Saved worlds: {known}.')
+        return prospect
+
+    async def choose_prospect(self, name):
+        """Point the server at a saved prospect for its next start. Returns the prospect's saved name.
+
+        The server only reads ServerSettings.ini when it starts and rewrites it while it runs,
+        so this refuses while it is running or another action is busy.
+        """
+        prospect = self.saved_prospect(name)
+        if self.busy:
+            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        if (await self.status())['running']:
+            raise ServerError(f'**{self.name}** is already running. Stop it with `/server stop` to switch worlds.')
+        if self.busy:  # another action started during the status check
+            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        try:
+            set_prospect(self.settings_file, prospect)
+        except OSError as error:
+            raise ServerError(f'Could not switch the world in {self.settings_file}: {error}') from None
+        log.info('Next start loads prospect %s', prospect)
+        return prospect
+
     def newest_save(self):
         """When the world save files last changed, or None if there are none."""
         saves = self.install_root / 'data' / 'Saved' / 'PlayerData'
@@ -220,6 +268,42 @@ def players_online(log_text):
         elif match := CLOSED.search(line):
             online.pop(match[1], None)
     return sorted(online.values())
+
+
+def set_prospect(path, prospect):
+    """Make ServerSettings.ini resume the given prospect on the next start.
+
+    With ResumeProspect=True the server loads LastProspectName, the same setting it writes
+    itself when a prospect is launched. LoadProspect and CreateProspect would override it, so
+    they are cleared. Other settings, line endings and the file's encoding are kept.
+    """
+    path = Path(path)
+    section = '[/Script/Icarus.DedicatedServerSettings]'
+    wanted = {'LastProspectName': prospect, 'ResumeProspect': 'True', 'LoadProspect': '', 'CreateProspect': ''}
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = b''
+    encoding = 'utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8-sig' if raw[:3] == b'\xef\xbb\xbf' else 'utf-8'
+    text = raw.decode(encoding)
+    newline = '\r\n' if '\r\n' in text or not text else '\n'
+    lines = text.splitlines()
+    if section not in (line.strip() for line in lines):
+        lines += [section]
+    current, start = None, None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('['):
+            current = stripped
+            if current == section:
+                start = i
+            continue
+        key = stripped.split('=', 1)[0].strip()
+        if current == section and '=' in stripped and key in wanted:
+            lines[i] = f'{key}={wanted.pop(key)}'
+    lines[start + 1:start + 1] = [f'{key}={value}' for key, value in wanted.items()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((newline.join(lines) + newline).encode(encoding))
 
 
 def tail(text, limit=1500):
@@ -295,9 +379,18 @@ def install_server_commands(bot, control):
             text = str(error)
         await interaction.followup.send(text)
 
+    async def worlds(interaction: discord.Interaction, current: str):
+        if interaction.user.id not in control.admins:
+            return []
+        names = [name for name in control.prospects() if current.lower() in name.lower()]
+        return [app_commands.Choice(name=name, value=name) for name in names[:MAX_CHOICES]]
+
     @server.command(name='start', description='Back up and start the Icarus server, optionally updating it and its mods first.')
-    async def start(interaction: discord.Interaction, update: bool = False):
-        if not update:
+    @app_commands.describe(update='Update the game and its mods before starting.',
+                           world='Saved world (prospect) to load. Leave empty to load the last one.')
+    @app_commands.autocomplete(world=worlds)
+    async def start(interaction: discord.Interaction, update: bool = False, world: Optional[str] = None):
+        if not update and not world:
             await run(interaction, 'start')
             return
         if not await allowed(interaction):
@@ -305,18 +398,31 @@ def install_server_commands(bot, control):
         await interaction.response.defer(thinking=True)
         began = time.monotonic()
         try:
-            code, text = await control.update_with_mods()
-            if code == 0:
-                # Start after the mods are swapped, within what is left of the reply window.
-                window = max(1, control.reply_window - (time.monotonic() - began))
-                text += '\n' + report('Start', *await control.run_action('start', window=window))
-            elif code is None:
-                text += ' After that, start it with `/server start`.'
+            if not update:
+                text = f'Loading **{await control.choose_prospect(world)}**.\n' + report('Start', *await control.run_action('start'))
             else:
-                text += '\nThe server was not started.'
+                text = await update_then_start(world, began)
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(fit(text))
+
+    async def update_then_start(world, began):
+        if world:
+            control.saved_prospect(world)  # refuse an unknown world before spending time on the update
+        code, text = await control.update_with_mods()
+        if code is None:
+            again = f' world:{control.saved_prospect(world)}' if world else ''
+            return text + f' After that, start it with `/server start{again}`.'
+        if code != 0:
+            return text + '\nThe server was not started.'
+        try:
+            if world:
+                text += f'\nLoading **{await control.choose_prospect(world)}**.'
+            # Start after the mods are swapped, within what is left of the reply window.
+            window = max(1, control.reply_window - (time.monotonic() - began))
+            return text + '\n' + report('Start', *await control.run_action('start', window=window))
+        except ServerError as error:
+            return text + f'\n{error}\nThe server was not started.'
 
     @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
     async def stop(interaction: discord.Interaction):
