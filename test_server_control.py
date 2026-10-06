@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 from Compabot import create_bot
 from mod_update import ModError
-from server_control import SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
+from server_control import MAX_CHOICES, SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
 from steam_query import Info
 
 ADMIN = 2
@@ -22,6 +22,8 @@ PLAYING = ('[1]LogNet: NotifyAcceptingConnection accepted from: 1:17777\n'
            '[2]LogNet: Join succeeded: Legiterately\n')
 LEFT = ('[3]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 1:17777, Name: SteamNetConnection_1, Driver: x\n'
         '[4]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 2:17777, Name: SteamNetConnection_2, Driver: x\n')
+SETTINGS = ('[/Script/Icarus.DedicatedServerSettings]\r\nMaxPlayers=2\r\nLoadProspect=\r\nCreateProspect=\r\n'
+            'ResumeProspect=False\r\nLastProspectName=ZAWORLDOO\r\nSaveGameOnExit=True\r\n')
 
 
 class FakeRunner:
@@ -122,6 +124,88 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.runner.calls), 1)
         self.assertIn('Update failed (exit code 1)', self.sent(interaction))
         self.assertIn('The server was not started.', self.sent(interaction))
+
+    def add_worlds(self, *names):
+        prospects = self.bot.server.prospects_dir
+        prospects.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (prospects / f'{name}.json').write_text('{}')
+            (prospects / f'{name}.json.backup').write_text('{}')
+
+    def write_settings(self, text=SETTINGS, encoding='utf-8'):
+        settings = self.bot.server.settings_file
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_bytes(text.encode(encoding))
+
+    def settings(self, encoding='utf-8'):
+        return self.bot.server.settings_file.read_bytes().decode(encoding)
+
+    async def test_start_with_world_switches_prospect_then_starts(self):
+        self.add_worlds('ELMUNDOFOO', 'ZAWORLDOO')
+        self.write_settings(SETTINGS.replace('LoadProspect=', 'LoadProspect=ZAWORLDOO'))
+        self.runner.result = (0, '{"running":false}')
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, False, 'elmundofoo')
+        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Start-IcarusServer.ps1'])
+        self.assertTrue(self.sent(interaction).startswith('Loading **ELMUNDOFOO**.\nStart finished.'))
+        expected = (SETTINGS.replace('LastProspectName=ZAWORLDOO', 'LastProspectName=ELMUNDOFOO')
+                    .replace('ResumeProspect=False', 'ResumeProspect=True'))
+        self.assertEqual(self.settings(), expected)
+
+    async def test_start_without_world_leaves_settings_alone(self):
+        self.add_worlds('ELMUNDOFOO')
+        self.write_settings()
+        await self.command('start').callback(self.interaction(), False, None)
+        self.assertEqual(self.scripts_run(), ['Start-IcarusServer.ps1'])
+        self.assertEqual(self.settings(), SETTINGS)
+
+    async def test_start_with_unknown_world_does_nothing(self):
+        self.add_worlds('ELMUNDOFOO', 'ZAWORLDOO')
+        self.write_settings()
+        for update in (False, True):
+            interaction = self.interaction()
+            await self.command('start').callback(interaction, update, 'NEWWORLD')
+            self.assertEqual(self.sent(interaction),
+                             'There is no saved world called `NEWWORLD`. Saved worlds: `ELMUNDOFOO`, `ZAWORLDOO`.')
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.settings(), SETTINGS)
+
+    async def test_start_with_world_refuses_while_running(self):
+        self.add_worlds('ELMUNDOFOO')
+        self.write_settings()
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, False, 'ELMUNDOFOO')
+        self.assertIn('already running. Stop it with `/server stop` to switch worlds.', self.sent(interaction))
+        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1'])
+        self.assertEqual(self.settings(), SETTINGS)
+
+    async def test_start_with_update_and_world_switches_after_updating(self):
+        self.add_worlds('ELMUNDOFOO')
+        self.write_settings()
+        self.bot.server.mods.update = lambda: ['up to date']
+        self.runner.result = (0, '{"running":false}')
+        interaction = self.interaction()
+        await self.command('start').callback(interaction, True, 'ELMUNDOFOO')
+        self.assertEqual(self.scripts_run(), ['Update-IcarusServer.ps1', 'Get-IcarusStatus.ps1', 'Start-IcarusServer.ps1'])
+        self.assertIn('\nLoading **ELMUNDOFOO**.\nStart finished.', self.sent(interaction))
+        self.assertIn('LastProspectName=ELMUNDOFOO\r\n', self.settings())
+
+    async def test_switch_keeps_utf16_and_adds_missing_keys(self):
+        self.add_worlds('ELMUNDOFOO')
+        self.write_settings('[/Script/Icarus.DedicatedServerSettings]\r\nMaxPlayers=2\r\n', 'utf-16')
+        self.runner.result = (0, '{"running":false}')
+        self.assertEqual(await self.bot.server.choose_prospect('ELMUNDOFOO'), 'ELMUNDOFOO')
+        self.assertEqual(self.settings('utf-16'),
+                         '[/Script/Icarus.DedicatedServerSettings]\r\nLastProspectName=ELMUNDOFOO\r\n'
+                         'ResumeProspect=True\r\nLoadProspect=\r\nCreateProspect=\r\nMaxPlayers=2\r\n')
+
+    async def test_world_autocomplete(self):
+        self.add_worlds('ELMUNDOFOO', 'ZAWORLDOO', *(f'W{i:02}' for i in range(30)))
+        worlds = self.command('start')._params['world'].autocomplete
+        self.assertEqual([c.value for c in await worlds(self.interaction(), 'foo')], ['ELMUNDOFOO'])
+        self.assertEqual(len(await worlds(self.interaction(), '')), MAX_CHOICES)
+        self.assertEqual(await worlds(self.interaction(user=99), ''), [])
 
     async def test_each_action_runs_its_script(self):
         self.runner.result = (0, '{"running":false}')  # backup checks the server is off first

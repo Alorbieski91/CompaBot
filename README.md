@@ -69,6 +69,7 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 | --- | --- |
 | `/server status` | Whether the server is running, since when, whether it is ready for players on port 17777 (read from the server log), how many players are on, and the last backup time. |
 | `/server start update:False` | Back up and start the server. `update:True` runs `/server update` (game and mods) first, and starts only if it worked. |
+| `/server start world:NAME` | Load a different saved world (prospect) and start the server. The name autocompletes from `data\Saved\PlayerData\DedicatedServer\Prospects`; a name with no save there is refused, so this never creates a new world. The server must be stopped first. Compabot sets `LastProspectName=NAME` and `ResumeProspect=True` in `ServerSettings.ini` and clears `LoadProspect` and `CreateProspect`. Without `world`, the ini is left alone and the server resumes the last world. Scheduled starts and update restarts never change the world. |
 | `/server stop` | Close the server window normally, wait up to 30 seconds, then take a final backup. |
 | `/server backup` | Zip the save folder into `backups` now. The server must be stopped first. |
 | `/server update` | Back up and update through SteamCMD, then update the mods (below). The server must be stopped first. |
