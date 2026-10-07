@@ -9,9 +9,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from Compabot import create_bot
-from mod_update import ModError
-from server_control import MAX_CHOICES, SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
-from steam_query import Info
+from bot.icarus.mod_update import ModError
+from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
+from bot.icarus.steam_query import Info
 
 ADMIN = 2
 # Trimmed from a real Icarus.log: two players join, then both leave.

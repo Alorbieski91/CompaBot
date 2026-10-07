@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mod_update import MODINFO_URL, PAK_MAGIC, ModError, ModUpdater, game_version
+from bot.icarus.mod_update import MODINFO_URL, PAK_MAGIC, ModError, ModUpdater, game_version
 
 BASE = 'https://github.com/laanp/Icarus_Mods_Separated'
 README = BASE + '/raw/main/laanp-PetesBeaconTeleport_Readme.md'

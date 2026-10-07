@@ -9,7 +9,7 @@ from pathlib import Path
 
 import discord
 
-from server_control import ServerError
+from .server_control import ServerError
 
 log = logging.getLogger('compabot.monitor')
 

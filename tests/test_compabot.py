@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from Compabot import create_bot
-from features import install_features
-from storage import Store
+from bot.features import install_features
+from bot.storage import Store
 
 
 class StorageTests(unittest.TestCase):

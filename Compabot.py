@@ -9,12 +9,12 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from active_hours import ActiveHours, parse_time
-from auto_update import AutoUpdater
-from features import install_features
-from monitor import install_monitor
-from server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit, install_server_commands
-from storage import Store
+from bot.features import install_features
+from bot.icarus.active_hours import ActiveHours, parse_time
+from bot.icarus.auto_update import AutoUpdater
+from bot.icarus.monitor import install_monitor
+from bot.icarus.server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit, install_server_commands
+from bot.storage import Store
 
 BASE = Path(__file__).resolve().parent
 log = logging.getLogger('compabot')

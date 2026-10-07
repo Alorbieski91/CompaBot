@@ -2,9 +2,9 @@ import datetime
 import unittest
 from zoneinfo import ZoneInfo
 
-from active_hours import ActiveHours, clock_time, parse_time
-from server_control import ServerError
-from steam_query import Info
+from bot.icarus.active_hours import ActiveHours, clock_time, parse_time
+from bot.icarus.server_control import ServerError
+from bot.icarus.steam_query import Info
 
 CHICAGO = ZoneInfo('America/Chicago')
 
