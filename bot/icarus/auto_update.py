@@ -17,9 +17,8 @@ import subprocess
 import time
 from pathlib import Path
 
-import patch_notes
-
-from server_control import ServerError, report
+from . import patch_notes
+from .server_control import ServerError, report
 
 log = logging.getLogger('compabot.autoupdate')
 

@@ -215,6 +215,27 @@ local environments are ignored by Git. Only one bot process should use the datab
 .\.venv\Scripts\python.exe -m unittest -v
 ```
 
-`Compabot.py` handles startup and events, `features.py` defines slash commands, and
-`storage.py` handles SQLite, `server_control.py` defines `/server`, `mod_update.py` updates mods, `auto_update.py` installs game updates on a schedule, `active_hours.py` starts and stops the server at set times,
-`patch_notes.py` summarizes the patch notes, `monitor.py` posts the server alerts, and `steam_query.py` reads the player count. No external database or paid service is needed.
+## Layout
+
+```
+Compabot.py                  starts the bot and handles events (run this)
+Start-CompaBot.ps1           restart loop used by the CompaBot startup task
+Stop-CompaBot.ps1            stops the bot and its restart loop
+Install-CompaBotStartup.ps1  creates or removes the startup task
+bot/
+  features.py                quotes, favorites, /pick and /say
+  storage.py                 SQLite storage for quotes and favorites
+  icarus/
+    server_control.py        /server commands and the Icarus script runner
+    Get-IcarusStatus.ps1     tells server_control.py whether the server is running
+    monitor.py               down, crash and back-up alerts
+    steam_query.py           player count from the Steam query port
+    auto_update.py           scheduled game updates
+    patch_notes.py           gameplay changes from the Steam patch notes
+    mod_update.py            laanp mod updates
+    active_hours.py          scheduled start and stop
+tests/                       unit tests (run with the command above)
+data/, logs/, .env           created locally and ignored by Git
+```
+
+No external database or paid service is needed.

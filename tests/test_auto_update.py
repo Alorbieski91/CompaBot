@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
-import patch_notes
-from server_control import SCRIPTS, ServerControl
-from steam_query import Info
+from bot.icarus.auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
+from bot.icarus import patch_notes
+from bot.icarus.server_control import SCRIPTS, ServerControl
+from bot.icarus.steam_query import Info
 
 APP_INFO = '''AppID : 2089300, change number : 31234567
 "2089300"

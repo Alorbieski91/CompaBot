@@ -10,7 +10,7 @@ import datetime
 import logging
 import time
 
-from server_control import ServerError, report
+from .server_control import ServerError, report
 
 log = logging.getLogger('compabot.schedule')
 

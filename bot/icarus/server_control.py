@@ -13,8 +13,8 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from mod_update import ModError, ModUpdater
-from steam_query import Info, query_info
+from .mod_update import ModError, ModUpdater
+from .steam_query import Info, query_info
 
 log = logging.getLogger('compabot.server')
 
