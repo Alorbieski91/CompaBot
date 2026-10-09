@@ -86,6 +86,7 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.control = ServerControl([], scripts)
         self.control.query = lambda port: None
         self.control.mods.update = lambda: ['laanp-PetesBeaconTeleport: w252 v1 is the latest release.']
+        self.control.mods.available = lambda: []
         self.messages = []
         self.queries = []
 
@@ -236,6 +237,86 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         await self.updater.check()
         self.assertIn('Installed Icarus build 20400000', self.messages[0])
         self.assertIn('- Kiwis will now lay eggs when well fed', self.messages[1])
+
+
+    def mod_release(self, *, works=True):
+        """The game is current and laanp has a newer Pete's Beacon Teleport."""
+        self.manifest(20400000)
+        pending = ['laanp-PetesBeaconTeleport w252 v1 to w253 v1']
+        self.control.mods.available = lambda: list(pending)
+        def update():
+            if not works:
+                return ['Mod update failed: laanp-PetesBeaconTeleport_v1_w253_P.pak did not download as a valid .pak file.']
+            pending.clear()
+            return ['laanp-PetesBeaconTeleport: updated w252 v1 to w253 v1 (old file kept in backups\\mods).']
+        self.control.mods.update = update
+
+    async def test_mod_release_restarts_an_empty_server(self):
+        self.mod_release()
+        self.write_log(JOIN.format(1, 'nscript') + LEAVE.format(1))
+        runner = self.use(running=True)
+        self.assertEqual(await self.updater.check(), 2 * 60 * 60)
+        self.assertEqual(runner.ran, ['Stop-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
+        self.assertTrue(self.messages[0].startswith('Updated the mods automatically.\nMods:\n'
+                                                    'laanp-PetesBeaconTeleport: updated w252 v1 to w253 v1'))
+        self.assertIn('Start finished.', self.messages[0])
+        self.assertIsNone(self.control.busy)
+        await self.updater.check()
+        self.assertEqual(len(self.messages), 1)
+
+    async def test_mod_release_on_a_stopped_server_leaves_it_stopped(self):
+        self.mod_release()
+        runner = self.use(running=False)
+        await self.updater.check()
+        self.assertEqual(runner.ran, [])
+        self.assertIn('Updated the mods automatically.', self.messages[0])
+
+    async def test_mod_release_waits_while_players_are_on(self):
+        self.mod_release()
+        self.write_log(JOIN.format(1, 'nscript'))
+        runner = self.use(running=True)
+        self.assertEqual(await self.updater.check(), WHILE_PLAYING)
+        self.assertEqual(await self.updater.check(), WHILE_PLAYING)
+        self.assertEqual(runner.ran, [])
+        self.assertEqual(self.messages, ['A mod update is out (laanp-PetesBeaconTeleport w252 v1 to w253 v1). '
+                                         'I will install it once nscript has left the server.'])
+
+    async def test_failed_mod_update_restarts_and_is_not_retried(self):
+        self.mod_release(works=False)
+        self.write_log('')
+        runner = self.use(running=True)
+        await self.updater.check()
+        self.assertEqual(runner.ran, ['Stop-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
+        self.assertIn('Tried to update the mods automatically.', self.messages[0])
+        self.assertIn('run `/server mods` to retry', self.messages[0])
+        await self.updater.check()
+        self.assertEqual((len(runner.ran), len(self.messages)), (2, 1))
+
+    async def test_game_and_mod_updates_share_one_restart(self):
+        self.control.mods.available = lambda: self.fail('a game update already brings the mods')
+        self.write_log('')
+        runner = self.use(running=True)
+        await self.updater.check()
+        self.assertEqual(runner.ran, ['Stop-IcarusServer.ps1', 'Update-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
+        self.assertEqual(len(self.messages), 1)
+
+    async def test_mods_are_checked_when_steamcmd_is_down(self):
+        async def broken(steamcmd):
+            raise asyncio.TimeoutError
+        self.updater.query = broken
+        self.mod_release()
+        self.use(running=False)
+        await self.updater.check()
+        self.assertIn('Updated the mods automatically.', self.messages[0])
+
+    async def test_unreadable_mod_list_is_ignored(self):
+        self.manifest(20400000)
+        def offline():
+            raise OSError('no network')
+        self.control.mods.available = offline
+        runner = self.use(running=False)
+        self.assertEqual(await self.updater.check(), 2 * 60 * 60)
+        self.assertEqual((runner.ran, self.messages), ([], []))
 
 
 class PatchNotesTests(unittest.IsolatedAsyncioTestCase):

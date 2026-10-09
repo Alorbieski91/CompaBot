@@ -119,7 +119,7 @@ installs a mod made for a newer game than the server has. Other mods are left al
 Your own game client needs the same mod file in its own `Content\Paks\mods` folder.
 
 
-### Automatic game updates
+### Automatic game and mod updates
 
 While Compabot runs, it checks for an Icarus server update every 2 hours (and a minute after
 it starts) by asking SteamCMD for the latest public build and comparing it with the build in
@@ -135,10 +135,19 @@ The update script backs up the saves before SteamCMD runs, as with `/server upda
 update fails, Compabot still starts the server again (if it was running) and tries the update
 at the next check. It skips a check while a `/server` command is running.
 
+When there is no game update, the same check also asks laanp's mod list whether an installed
+mod has a newer release that the installed game can run. If one does, Compabot installs it the
+same way: it waits until nobody is connected, stops the server, swaps the mod (old file to
+`backups\mods`), and starts the server again if it was running. A mod made for the next game
+week waits for that game update, which brings it in with one restart. If a mod update fails,
+Compabot starts the server again and does not retry that same release on its own; run
+`/server mods` to try again. Remember that your own game client needs the new mod file too.
+
 Set `AUTO_UPDATE_CHANNEL_ID` in `.env` to a channel ID (Developer Mode > right-click the
 channel > Copy Channel ID) to have Compabot post there when an update is waiting and when it
 has installed one. Without it, these messages only go to the log. Set `AUTO_UPDATE_HOURS`
-to change how often it checks, or to `0` to turn automatic updates off.
+to change how often it checks (for example `1` for hourly, or `0.5`), or to `0` to turn
+automatic game and mod updates off.
 
 #### What changed in the game
 

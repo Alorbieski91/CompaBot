@@ -109,21 +109,51 @@ class ModUpdater:
         for old in copies[OLD_COPIES:]:
             old.unlink()
 
+    def index(self):
+        """laanp's mod list, by lower-case mod name."""
+        try:
+            return {m['name'].lower(): m for m in json.loads(self.read(MODINFO_URL))['mods']}
+        except Exception as error:
+            raise ModError(f'Could not read the mod list from GitHub: {error}') from None
+
+    @staticmethod
+    def latest_release(index, name):
+        """A mod's list entry, its latest pak URL, and that pak's name match (None if there is no release)."""
+        entry = index.get(name.lower())
+        pak_url = (entry or {}).get('files', {}).get('pak', '')
+        return entry, pak_url, PAK_NAME.match(Path(urlparse(pak_url).path).name)
+
+    def available(self):
+        """Installed mods with a newer release the installed game can run, as 'name wX vY to wA vB'.
+
+        Only reads from GitHub; nothing is downloaded or moved.
+        """
+        installed = self.installed()
+        if not installed:
+            return []
+        index = self.index()
+        game = game_version(self.root)
+        found = []
+        for name, week, fix, _ in installed:
+            entry, _, latest = self.latest_release(index, name)
+            if not latest or (int(latest['week']), int(latest['fix'])) <= (week, fix):
+                continue
+            rev, _ = self.built_for(entry)
+            if rev and game and version_key(rev) > version_key(game):
+                continue  # made for a newer game; the game update will bring it in
+            found.append(f"{name} w{week} v{fix} to w{latest['week']} v{latest['fix']}")
+        return found
+
     def update(self):
         """Update installed laanp mods to their latest release. Returns lines to report."""
         installed = self.installed()
         if not installed:
             return ['No mods installed.']
-        try:
-            index = {m['name'].lower(): m for m in json.loads(self.read(MODINFO_URL))['mods']}
-        except Exception as error:
-            raise ModError(f'Could not read the mod list from GitHub: {error}') from None
+        index = self.index()
         game = game_version(self.root)
         lines = []
         for name, week, fix, path in installed:
-            entry = index.get(name.lower())
-            pak_url = (entry or {}).get('files', {}).get('pak', '')
-            latest = PAK_NAME.match(Path(urlparse(pak_url).path).name)
+            entry, pak_url, latest = self.latest_release(index, name)
             if not latest:
                 lines.append(f'{name}: not in laanp\'s mod list, left as is.')
                 continue
