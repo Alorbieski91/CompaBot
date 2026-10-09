@@ -107,6 +107,23 @@ class ModUpdaterTests(unittest.TestCase):
         with self.assertRaisesRegex(ModError, 'Could not read the mod list'):
             self.run_update(web)
 
+    def test_available_lists_newer_releases_without_downloading(self):
+        self.install()
+        web = FakeWeb(week=252)
+        self.assertEqual(ModUpdater(self.root, opener=web).available(),
+                         ['laanp-PetesBeaconTeleport w251 v1 to w252 v1'])
+        self.assertNotIn(pak_url(252), web.requests)
+        self.assertTrue((self.mods / 'laanp-PetesBeaconTeleport_v1_w251_P.pak').exists())
+
+    def test_available_skips_current_and_too_new_releases(self):
+        self.install('laanp-PetesBeaconTeleport_v1_w252_P.pak')
+        self.assertEqual(ModUpdater(self.root, opener=FakeWeb(week=252)).available(), [])
+        self.install()
+        (self.mods / 'laanp-PetesBeaconTeleport_v1_w252_P.pak').unlink()
+        self.assertEqual(ModUpdater(self.root, opener=FakeWeb(week=253, rev='3.0.31.159000')).available(), [])
+        (self.mods / 'laanp-PetesBeaconTeleport_v1_w251_P.pak').unlink()
+        self.assertEqual(ModUpdater(self.root, opener=FakeWeb()).available(), [])
+
     def test_keeps_five_old_copies(self):
         backups = self.root / 'backups' / 'mods'
         backups.mkdir(parents=True)

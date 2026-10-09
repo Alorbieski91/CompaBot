@@ -1,10 +1,14 @@
-"""Install Icarus game updates on a schedule, so the server is current before anyone plays.
+"""Install Icarus game and mod updates on a schedule, so the server is current before anyone plays.
 
 Every few hours Compabot asks SteamCMD for the latest public build of the Icarus dedicated
 server (Steam app 2089300) and compares it with the build in the installed appmanifest.
 When Steam has a newer one, it waits until nobody is connected, stops the server (which
 backs up), runs the update script (which backs up again), updates the mods, and starts the
 server again if it was running. Who is connected is read from the server log.
+
+Without a game update, it also checks laanp's mod list for a newer release of an installed mod
+that the installed game can run, and installs it the same way: wait until nobody is on, stop,
+swap the mod, start again.
 
 Whenever the installed build changes (automatically or by hand), it also posts the gameplay
 changes from that week's patch notes; see patch_notes.py.
@@ -18,7 +22,7 @@ import time
 from pathlib import Path
 
 from . import patch_notes
-from .server_control import ServerError, report
+from .server_control import ServerError, mod_report, report
 
 log = logging.getLogger('compabot.autoupdate')
 
@@ -72,6 +76,7 @@ class AutoUpdater:
         self.every = every_hours * 60 * 60
         self.query = query
         self.announced = None
+        self.failed_mods = None
         # Remembers which build the last patch-notes post covered, across restarts.
         self.state_file = Path(state_file) if state_file else None
         self.news = news or (lambda: asyncio.to_thread(patch_notes.fetch_json, patch_notes.NEWS_URL))
@@ -116,8 +121,16 @@ class AutoUpdater:
                 delay = self.every
             await asyncio.sleep(delay)
 
+    async def mod_updates(self):
+        """Mods with a newer release the installed game can run, or [] if laanp's list can't be read."""
+        try:
+            return await asyncio.to_thread(self.control.mods.available)
+        except Exception as error:
+            log.warning('Could not check for mod updates: %r', error)
+            return []
+
     async def check(self):
-        """Check for a game update once, installing it if nobody is playing. Returns seconds until the next check."""
+        """Check for a game or mod update once, installing it if nobody is playing. Returns seconds until the next check."""
         control = self.control
         if control.busy:
             return WHILE_PLAYING
@@ -126,32 +139,47 @@ class AutoUpdater:
             latest = public_build(await self.query(control.install_root / 'steamcmd' / 'steamcmd.exe'))
         except (OSError, asyncio.TimeoutError) as error:
             log.warning('Could not ask SteamCMD for the latest build: %r', error)
-            return self.every
+            latest = None
+        game = bool(installed and latest and latest > installed)
         if not installed or not latest:
             log.warning('Could not compare builds (installed %s, Steam %s)', installed, latest)
-            return self.every
-        if latest <= installed:
+        elif not game:
             log.info('Icarus server is up to date (build %s)', installed)
             await self.share_notes(installed)
+        # A game update brings the mods along with it, so only look for mod releases without one.
+        mods = [] if game else await self.mod_updates()
+        if mods and mods == self.failed_mods:
+            log.info('Not retrying the mod update that failed (%s); /server mods tries again', '; '.join(mods))
+            mods = []
+        if not game and not mods:
             return self.every
+        if game:
+            key, what = latest, f'An Icarus update is out (build {installed} to {latest})'
+        else:
+            key, what = mods, f'A mod update is out ({"; ".join(mods)})'
         try:
             state = await control.status()
             if state['running']:
                 players = state['players']
                 if players.players:
-                    if self.announced != latest:
-                        self.announced = latest
+                    if self.announced != key:
+                        self.announced = key
                         who = (f'{" and ".join(players.names)} {"has" if len(players.names) == 1 else "have"}' if players.names
                                else f'{players.players} {"player has" if players.players == 1 else "players have"}')
-                        await self.notify(f'An Icarus update is out (build {installed} to {latest}). '
-                                          f'I will install it once {who} left the server.')
+                        await self.notify(f'{what}. I will install it once {who} left the server.')
                     return WHILE_PLAYING
                 code, output = await control.run_action('stop', window=SCRIPT_WINDOW)
                 if code != 0:
-                    await self.notify('An Icarus update is out, but I could not stop the server to install it.\n'
+                    await self.notify(f'{what}, but I could not stop the server to install it.\n'
                                       + report('Stop', code, output))
                     return self.every
-            code, text = await control.update_with_mods(window=SCRIPT_WINDOW)
+            if game:
+                code, text = await control.update_with_mods(window=SCRIPT_WINDOW)
+            else:
+                lines = await control.update_mods()
+                code = 1 if any(line.startswith('Mod update failed') for line in lines) else 0
+                self.failed_mods = mods if code else None
+                text = mod_report('', lines).lstrip('\n')
             if state['running'] and code is not None:
                 # Start again even after a failed update, so nobody is locked out until someone notices.
                 text += '\n' + report('Start', *await control.run_action('start', window=SCRIPT_WINDOW))
@@ -159,6 +187,11 @@ class AutoUpdater:
             log.warning('Automatic update stopped: %s', error)
             return WHILE_PLAYING
         self.announced = None
+        if not game:
+            verb = 'Updated the mods' if code == 0 else 'Tried to update the mods'
+            again = '' if code == 0 else '\nI will not try this again on my own; run `/server mods` to retry.'
+            await self.notify(f'{verb} automatically.\n{text}{again}')
+            return self.every
         verb = 'Installed' if code == 0 else 'Tried to install'
         await self.notify(f'{verb} Icarus build {latest} automatically (was {installed}).\n{text}')
         if code == 0:
