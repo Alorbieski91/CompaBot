@@ -18,6 +18,8 @@ if ($FindPython) { $python; exit 0 }
 $bot = Join-Path $PSScriptRoot 'Compabot.py'
 $logs = Join-Path $PSScriptRoot 'logs'
 New-Item -ItemType Directory -Force $logs | Out-Null
+# Stop-CompaBot.ps1 leaves this so the watchdog knows the bot was stopped on purpose.
+Remove-Item (Join-Path $logs 'compabot.stopped') -ErrorAction SilentlyContinue
 
 $running = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     Where-Object CommandLine -like '*Compabot.py*'

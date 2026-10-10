@@ -195,11 +195,39 @@ powershell -ExecutionPolicy Bypass -File .\Install-CompaBotStartup.ps1
 ```
 
 This creates a Task Scheduler task named `CompaBot` that runs `Start-CompaBot.ps1` hidden,
-30 seconds after you sign in. It uses Python from `.venv`, `venv`, or this folder if one has
+30 seconds after you sign in, and a `CompaBot Watchdog` task (below). It uses Python from `.venv`, `venv`, or this folder if one has
 a virtual environment, otherwise the Python on your PATH. Output goes to `logs\compabot.log` (the run before is kept as
 `logs\compabot.prev.log`). Use `.\Stop-CompaBot.ps1` to stop it, `Start-ScheduledTask CompaBot`
-to start it again, and `.\Install-CompaBotStartup.ps1 -Remove` to turn auto-start off.
+to start it again, and `.\Install-CompaBotStartup.ps1 -Remove` to remove both tasks.
 Don't also run `Compabot.py` by hand while the task is running.
+
+### Watchdog: updates and restarts
+
+The `CompaBot Watchdog` task runs `Watch-CompaBot.ps1` every 5 minutes while you are signed in.
+It is a plain PowerShell script, so it costs nothing to run. Each time it:
+
+1. **Pulls new code.** If GitHub's `main` has new commits, it fast-forwards this folder, runs
+   `pip install -r requirements.txt` if that file changed, runs the tests, and restarts Compabot.
+   If any of that fails, or Compabot doesn't sign in to Discord within 2 minutes, it goes back to
+   the commit it was on, restarts Compabot there, and won't try that commit again (a newer commit
+   is tried as usual). It skips the update while an Icarus script or SteamCMD is running, so a
+   `/server` action or automatic update is never cut off. It never overwrites changes made on this
+   PC: if a tracked file was edited here, or this folder is not on `main` or has commits that
+   aren't on GitHub, it leaves the folder alone and says so.
+2. **Starts Compabot if it is down.** `Start-CompaBot.ps1` already restarts the bot after a crash;
+   the watchdog covers that restart loop itself being gone. It restarts Compabot at most 3 times an
+   hour, so a bot that can't stay up isn't restarted forever.
+
+It leaves Compabot off when it was stopped on purpose: after `.\Stop-CompaBot.ps1` (until the next
+`Start-ScheduledTask CompaBot`), or after Compabot shut down normally. So the usual
+`.\Stop-CompaBot.ps1` then `Start-ScheduledTask CompaBot` still works, and after a merge on GitHub
+you no longer need to `git pull` and restart by hand.
+
+What it does is written to `logs\watchdog.log`. To also hear about it in Discord, even while
+Compabot is down, create a webhook (channel settings > Integrations > Webhooks > New Webhook >
+Copy Webhook URL) and set `WATCHDOG_WEBHOOK_URL` in `.env` to it. It posts each update, rollback and
+restart, and each ongoing problem once. It needs Git on your PATH to pull updates; without it, it
+only keeps Compabot running.
 
 The task only runs once you are signed in, because `/server stop` needs the Icarus server's
 console window. For unattended restarts, have Windows sign in automatically:
@@ -230,7 +258,8 @@ local environments are ignored by Git. Only one bot process should use the datab
 Compabot.py                  starts the bot and handles events (run this)
 Start-CompaBot.ps1           restart loop used by the CompaBot startup task
 Stop-CompaBot.ps1            stops the bot and its restart loop
-Install-CompaBotStartup.ps1  creates or removes the startup task
+Watch-CompaBot.ps1           pulls updates and restarts Compabot if it is down (watchdog task)
+Install-CompaBotStartup.ps1  creates or removes the startup and watchdog tasks
 bot/
   features.py                quotes, favorites, /pick and /say
   storage.py                 SQLite storage for quotes and favorites
