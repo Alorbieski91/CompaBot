@@ -259,6 +259,24 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.command('ores').callback(interaction, None, None)
         self.assertIn('Only the server admins', interaction.response.send_message.call_args.args[0])
 
+    def upload(self, raw, filename='MYSOLO.json'):
+        return SimpleNamespace(filename=filename, size=len(raw), read=AsyncMock(return_value=raw))
+
+    async def test_ores_reads_an_uploaded_save(self):
+        interaction = self.interaction()
+        upload = self.upload(save(WORLD))
+        await self.command('ores').callback(interaction, None, 'Gold', upload)
+        self.assertTrue(self.sent(interaction).startswith(
+            '**MYSOLO** (Olympus): 1 Gold deep ore deposits in I9.'))
+        self.assertEqual(list(self.files(interaction)), ['MYSOLO-deep-ores.jpg', 'MYSOLO-deep-ores.txt'])
+
+    async def test_ores_refuses_bad_uploads(self):
+        for upload, message in ((self.upload(b'{}', 'notes.txt'), 'is not a prospect save'),
+                                (self.upload(b'{}'), "Couldn't read `MYSOLO.json`: it doesn't look like a prospect save")):
+            interaction = self.interaction()
+            await self.command('ores').callback(interaction, None, None, upload)
+            self.assertIn(message, self.sent(interaction))
+
     async def test_ore_autocomplete(self):
         ores = self.command('ores')._params['ore'].autocomplete
         self.assertEqual([(c.name, c.value) for c in await ores(self.interaction(), 'ice')],
