@@ -32,6 +32,9 @@ LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Updat
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
 STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
+# How long a freshly started server gets to load its world (usually 10-20 seconds), and how often to look.
+READY_TIMEOUT = 5 * 60
+READY_POLL = 10
 # The running server keeps its save and log files open, so backups only run while it is off.
 RUNNING_BACKUP = ("{name} is running, and its save files can't be backed up while it has them open. "
                   '`/server stop` backs it up as soon as it has closed.')
@@ -170,6 +173,28 @@ class ServerControl:
         state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
         return state
 
+
+    async def wait_ready(self, timeout=READY_TIMEOUT, poll=READY_POLL):
+        """After a start, wait for the server to accept players.
+
+        Returns 'ready', 'closed' if the server process went away while loading, or 'loading' if
+        it is still not ready after `timeout` seconds. The start script only launches the server,
+        so its exit code says nothing about whether the server got through loading.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            await asyncio.sleep(poll)
+            try:
+                state = await self.status()
+            except ServerError as error:
+                log.warning('Could not check whether the server is up: %s', error)
+            else:
+                if not state['running']:
+                    return 'closed'
+                if state['ready']:
+                    return 'ready'
+            if time.monotonic() >= deadline:
+                return 'loading'
 
     def current_log(self, started):
         """The server log text, or '' if it is missing or left over from an earlier run."""

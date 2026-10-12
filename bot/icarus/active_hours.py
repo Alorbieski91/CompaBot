@@ -10,7 +10,7 @@ import datetime
 import logging
 import time
 
-from .server_control import ServerError, report
+from .server_control import READY_TIMEOUT, ServerError, report
 
 log = logging.getLogger('compabot.schedule')
 
@@ -96,13 +96,33 @@ class ActiveHours:
         again = f' It starts again at {clock_time(morning)}.' if morning else ''
         return f'{name} was shut down at {at} because nobody was online.{again}'
 
-    async def morning(self, state):
-        name, at = f'**{self.control.name}**', clock_time(self.events['start'])
-        if not state['running']:
+    async def launch(self):
+        """Start the server and wait until it accepts players, starting it once more if it closes while loading.
+
+        Returns (problem or None, whether it had to be started twice).
+        """
+        for attempt in (1, 2):
             code, output = await self.control.run_action('start', window=SCRIPT_WINDOW)
             if code != 0:
-                return f'{name} was due to start at {at}, but it did not start.\n' + report('Start', code, output)
-            return f'{name} was started at {at} for the day.'
+                return report('Start', code, output), attempt > 1
+            result = await self.control.wait_ready()
+            if result == 'ready':
+                return None, attempt > 1
+            if result == 'loading':
+                return (f'It is running but still not ready for players after {READY_TIMEOUT // 60} minutes. '
+                        'Check `/server status`; if it stays this way, use `/server stop` and `/server start`.'), attempt > 1
+            log.warning('The server closed while loading (start %s of 2)', attempt)
+        return ('It closed while loading, twice, without a crash report. '
+                'Check `data\\Saved\\Logs` on the PC, then try `/server start`.'), True
+
+    async def morning(self, state):
+        name, at = f'**{self.control.name}**', clock_time(self.events['start'])
+        again = ' It closed while loading the first time, so I started it again.'
+        if not state['running']:
+            problem, retried = await self.launch()
+            if problem:
+                return f'{name} was due to start at {at}, but it did not come up.\n{problem}'
+            return f'{name} was started at {at} for the day and is ready for players.{again if retried else ""}'
         players = state['players']
         if players.players:
             log.info('Scheduled restart skipped: %s player(s) online', players.players)
@@ -110,7 +130,8 @@ class ActiveHours:
         code, output = await self.control.run_action('stop', window=SCRIPT_WINDOW)
         if code != 0:
             return f'{name} was due to restart at {at}, but stopping it did not work.\n' + report('Stop', code, output)
-        code, output = await self.control.run_action('start', window=SCRIPT_WINDOW)
-        if code != 0:
-            return f'{name} was stopped for its {at} restart, but it did not start again.\n' + report('Start', code, output)
-        return f'{name} was restarted at {at} to refresh it, since it had been running overnight with nobody online.'
+        problem, retried = await self.launch()
+        if problem:
+            return f'{name} was stopped for its {at} restart, but it did not come back up.\n{problem}'
+        return (f'{name} was restarted at {at} to refresh it, since it had been running overnight with nobody online. '
+                f'It is ready for players.{again if retried else ""}')
