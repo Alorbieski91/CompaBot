@@ -103,10 +103,11 @@ class ModUpdater:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         shutil.move(str(path), str(self.backup_dir / path.name))
         name = PAK_NAME.match(path.name)['name']
-        copies = sorted((p for p in self.backup_dir.glob('*.pak')
-                         if (m := PAK_NAME.match(p.name)) and m['name'] == name),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
-        for old in copies[OLD_COPIES:]:
+        # Newest first. Windows file times can tie for files written moments apart, so break ties
+        # by version, which keeps the file just retired.
+        copies = sorted(((p.stat().st_mtime, int(m['week']), int(m['fix']), p) for p in self.backup_dir.glob('*.pak')
+                         if (m := PAK_NAME.match(p.name)) and m['name'] == name), reverse=True)
+        for *_, old in copies[OLD_COPIES:]:
             old.unlink()
 
     def index(self):
