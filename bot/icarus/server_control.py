@@ -513,9 +513,9 @@ def install_server_commands(bot, control):
         except (discord.HTTPException, ProspectError) as error:
             raise ServerError(f"Couldn't read `{discord.utils.escape_markdown(file.filename)}`: {error}") from None
 
-    @server.command(name='ores', description='List the deep ore deposits in a saved world and attach its save for the ore map site.')
+    @server.command(name='ores', description='Map the deep ore deposits and oil wells in a saved world.')
     @app_commands.describe(world='Saved world (prospect). Leave empty for the one the server loads.',
-                           ore='Only list where this ore is.',
+                           ore='Only show where this ore (or oil) is.',
                            file='A prospect .json from your own PC to read instead of a server world.')
     @app_commands.autocomplete(world=worlds, ore=ores)
     async def deep_ores(interaction: discord.Interaction, world: Optional[str] = None, ore: Optional[str] = None,

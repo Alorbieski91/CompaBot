@@ -1,4 +1,4 @@
-"""Find the deep ore deposits in an Icarus prospect save, as the ore map site shows them.
+"""Find the deep ore deposits and oil wells in an Icarus prospect save, as the ore map site shows ores.
 
 The site is https://faysm.github.io/IcarusOreDeposit/. It only takes a dropped file, so
 /server ores lists the deposits itself and attaches the save for anyone who wants the map.
@@ -14,10 +14,12 @@ from dataclasses import dataclass
 ORE_MAP_SITE = 'https://faysm.github.io/IcarusOreDeposit/'
 # The terrain each map's save mentions.
 MAPS = {b'Terrain_016': 'Olympus', b'Terrain_017': 'Styx', b'Terrain_019': 'Prometheus', b'Terrain_021': 'Elysium'}
-# Deep ores the site has icons for; the save names them the same way.
+# Deep ores the site has icons for (the save names them the same way), then oil wells.
 ORES = ('Aluminium', 'Clay', 'Coal', 'Copper', 'Frozen_Wood', 'Gold', 'Iron', 'Limestone', 'Obsidian', 'Oxite',
         'Platinum', 'Salt', 'Scoria', 'Silicon', 'Stone', 'Sulfur', 'Titanium', 'Exotic', 'Exotic_Red_Raw',
-        'Super_Cooled_Ice', 'Exotic_Raw_Uranium')
+        'Super_Cooled_Ice', 'Exotic_Raw_Uranium', 'Oil')
+# Oil wells aren't deep ore, but the save records where each one is, so they are mapped too.
+OIL = 'Oil'
 # Every map spans -403,200 to 403,200 units on both axes, split into a 16 x 16 grid:
 # columns A-P from left to right, rows 1-16 from top to bottom, as on the ore map site.
 MAP_EDGE = 403200
@@ -28,6 +30,8 @@ COLUMNS = 'ABCDEFGHIJKLMNOP'
 DEPOSIT = b'Script/Icarus.ResourceDeposit'
 NAME = b'NameProperty'
 VECTOR = b'Vector'
+OIL_WELL = b'Script/Icarus.OilGeyserRecorderComponent'
+TRANSLATION = b'Translation'
 # After "NameProperty": its terminator, the 8-byte property size and a flag byte, then the name.
 NAME_SKIP = len(NAME) + 1 + 8 + 1
 # After "Vector": its terminator, the 16-byte struct GUID and a flag byte, then x, y, z floats.
@@ -57,7 +61,7 @@ def grid_cell(x, y):
 
 
 def ore_label(ore):
-    return ore.replace('_', ' ')
+    return 'Oil wells' if ore == OIL else ore.replace('_', ' ')
 
 
 def prospect_blob(raw):
@@ -72,7 +76,7 @@ def prospect_blob(raw):
 
 
 def find_deposits(data):
-    """The map name and the deep ore deposits in decompressed prospect data."""
+    """The map name and the deep ore deposits, then the oil wells, in decompressed prospect data."""
     world = next((name for marker, name in MAPS.items() if marker in data), 'Unknown map')
     deposits, at = [], 0
     while (at := data.find(DEPOSIT, at)) >= 0:
@@ -94,7 +98,24 @@ def find_deposits(data):
             continue
         deposits.append(Deposit(ore, x, y))
         at = vector_at + VECTOR_SKIP + 12
-    return world, deposits
+    return world, deposits + oil_wells(data)
+
+
+def oil_wells(data):
+    """Oil wells, from the position (ActorTransform's Translation) each one's record starts with."""
+    wells, at = [], 0
+    while (at := data.find(OIL_WELL, at)) >= 0:
+        at += len(OIL_WELL)
+        translation = data.find(TRANSLATION, at)
+        vector_at = data.find(VECTOR, translation) if translation >= 0 else -1
+        if vector_at < 0:
+            break
+        try:
+            x, y, _ = struct.unpack_from('<fff', data, vector_at + VECTOR_SKIP)
+        except struct.error:
+            break
+        wells.append(Deposit(OIL, x, y))
+    return wells
 
 
 def read_deposits(raw):
@@ -115,25 +136,35 @@ def by_ore(deposits):
     return sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
 
 
+def split_oil(deposits):
+    return [d for d in deposits if d.ore != OIL], [d for d in deposits if d.ore == OIL]
+
+
 def summary(prospect, world, deposits, ore=None):
-    """The reply text: counts per ore, or one ore's grid squares."""
+    """The reply text: counts per ore and where the oil wells are, or one ore's grid squares."""
     head = f'**{prospect}** ({world})'
+    if ore and ore.lower() == OIL.lower():
+        wells = split_oil(deposits)[1]
+        return f'{head}: {len(wells)} oil wells in {cells(wells)}.' if wells else f'{head} has no oil wells.'
     if ore:
         found = [d for d in deposits if d.ore.lower() == ore.lower()]
         if not found:
             return f'{head} has no {ore_label(ore)} deep ore deposits.'
         return f'{head}: {len(found)} {ore_label(found[0].ore)} deep ore deposits in {cells(found)}.'
-    if not deposits:
-        return f'{head} has no deep ore deposits that Compabot could find.'
-    counts = ' · '.join(f'{ore_label(name)} {len(group)}' for name, group in by_ore(deposits))
-    return f'{head}: {len(deposits)} deep ore deposits.\n{counts}'
+    ores, wells = split_oil(deposits)
+    oil = f'\nOil wells: {len(wells)} in {cells(wells)}.' if wells else ''
+    if not ores:
+        return f'{head} has no deep ore deposits that Compabot could find.' + oil
+    counts = ' · '.join(f'{ore_label(name)} {len(group)}' for name, group in by_ore(ores))
+    return f'{head}: {len(ores)} deep ore deposits.\n{counts}' + oil
 
 
 def listing(prospect, world, deposits):
     """A text file listing every deposit by ore and grid square."""
-    lines = [f'{prospect} ({world}): {len(deposits)} deep ore deposits',
+    ores, wells = split_oil(deposits)
+    lines = [f'{prospect} ({world}): {len(ores)} deep ore deposits, {len(wells)} oil wells',
              'Grid squares run A-P left to right and 1-16 top to bottom, as on ' + ORE_MAP_SITE, '']
-    for name, group in by_ore(deposits):
+    for name, group in by_ore(ores) + by_ore(wells):
         lines.append(f'{ore_label(name)} ({len(group)})')
         for deposit in sorted(group, key=lambda d: (COLUMNS.index(d.cell[0]), int(d.cell[1:]), d.x, d.y)):
             lines.append(f'  {deposit.cell:<4} x {deposit.x:>9.0f}  y {deposit.y:>9.0f}')
