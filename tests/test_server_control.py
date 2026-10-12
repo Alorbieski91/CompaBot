@@ -12,6 +12,7 @@ from Compabot import create_bot
 from bot.icarus.mod_update import ModError
 from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
 from bot.icarus.steam_query import Info
+from tests.test_ore_deposits import WORLD, save
 
 ADMIN = 2
 # Trimmed from a real Icarus.log: two players join, then both leave.
@@ -73,7 +74,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_registration(self):
         group = self.bot.tree.get_command('server')
-        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'backup', 'update', 'mods'})
+        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'backup', 'update', 'mods', 'ores'})
         group.to_dict(self.bot.tree)
 
     async def test_non_admins_are_refused_before_anything_runs(self):
@@ -206,6 +207,61 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c.value for c in await worlds(self.interaction(), 'foo')], ['ELMUNDOFOO'])
         self.assertEqual(len(await worlds(self.interaction(), '')), MAX_CHOICES)
         self.assertEqual(await worlds(self.interaction(user=99), ''), [])
+
+    def add_save(self, name, raw):
+        self.add_worlds(name)
+        (self.bot.server.prospects_dir / f'{name}.json').write_bytes(raw)
+
+    def files(self, interaction):
+        return {f.filename: f.fp.read() for f in interaction.followup.send.call_args.kwargs['files']}
+
+    async def test_ores_lists_deposits_and_attaches_the_save(self):
+        raw = save(WORLD)
+        self.add_save('ELMUNDOFOO', raw)
+        self.add_worlds('ZAWORLDOO')
+        self.write_settings(SETTINGS.replace('ZAWORLDOO', 'ELMUNDOFOO'))
+        self.bot.server.status = AsyncMock(side_effect=AssertionError('works while running'))
+        interaction = self.interaction()
+        await self.command('ores').callback(interaction, None, None)
+        self.assertEqual(self.sent(interaction),
+                         '**ELMUNDOFOO** (Olympus): 5 deep ore deposits.\nTitanium 3 · Gold 1 · Super Cooled Ice 1\n'
+                         'For the map, open <https://faysm.github.io/IcarusOreDeposit/> and drop `ELMUNDOFOO.json` on it.')
+        files = self.files(interaction)
+        self.assertEqual(files['ELMUNDOFOO.json'], raw)
+        self.assertIn(b'Titanium (3)', files['ELMUNDOFOO-deep-ores.txt'])
+        self.assertEqual(self.runner.calls, [])
+
+    async def test_ores_for_one_ore_in_a_named_world(self):
+        self.add_save('ELMUNDOFOO', save(WORLD))
+        self.add_worlds('ZAWORLDOO')
+        interaction = self.interaction()
+        await self.command('ores').callback(interaction, 'elmundofoo', 'Titanium')
+        self.assertTrue(self.sent(interaction).startswith(
+            '**ELMUNDOFOO** (Olympus): 3 Titanium deep ore deposits in A1 ×2, P16.\nFor the map'))
+
+    async def test_ores_falls_back_to_the_backup_save(self):
+        self.add_save('ELMUNDOFOO', b'{"half written')
+        (self.bot.server.prospects_dir / 'ELMUNDOFOO.json.backup').write_bytes(save(WORLD))
+        interaction = self.interaction()
+        await self.command('ores').callback(interaction, None, None)
+        self.assertIn('5 deep ore deposits', self.sent(interaction))
+
+    async def test_ores_errors(self):
+        self.add_worlds('ELMUNDOFOO', 'ZAWORLDOO')
+        interaction = self.interaction()
+        await self.command('ores').callback(interaction, None, None)
+        self.assertEqual(self.sent(interaction), 'Pick a world. Saved worlds: `ELMUNDOFOO`, `ZAWORLDOO`.')
+        await self.command('ores').callback(interaction, 'ELMUNDOFOO', None)
+        self.assertIn("Couldn't read the **ELMUNDOFOO** save: it doesn't look like a prospect save", self.sent(interaction))
+        interaction = self.interaction(user=99)
+        await self.command('ores').callback(interaction, None, None)
+        self.assertIn('Only the server admins', interaction.response.send_message.call_args.args[0])
+
+    async def test_ore_autocomplete(self):
+        ores = self.command('ores')._params['ore'].autocomplete
+        self.assertEqual([(c.name, c.value) for c in await ores(self.interaction(), 'ice')],
+                         [('Super Cooled Ice', 'Super_Cooled_Ice')])
+        self.assertEqual(await ores(self.interaction(user=99), ''), [])
 
     async def test_each_action_runs_its_script(self):
         self.runner.result = (0, '{"running":false}')  # backup checks the server is off first

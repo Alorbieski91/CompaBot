@@ -74,6 +74,7 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 | `/server backup` | Zip the save folder into `backups` now. The server must be stopped first. |
 | `/server update` | Back up and update through SteamCMD, then update the mods (below). The server must be stopped first. |
 | `/server mods` | Update the mods only. The server must be stopped first. |
+| `/server ores world:NAME ore:NAME` | List the deep ore deposits in a saved world by map grid square (A1 top left to P16 bottom right), and attach the full list plus the world's save so it can be dropped on the [ore map site](https://faysm.github.io/IcarusOreDeposit/). `world` defaults to the one the server loads; `ore` lists where just that ore is. Works while the server is running. |
 
 Backups only run while the server is off, because the running server keeps its save and log
 files open. `/server stop`, `/server start`, `/server update`, and the scheduled stops and restarts
