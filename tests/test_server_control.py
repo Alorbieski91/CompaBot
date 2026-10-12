@@ -225,10 +225,12 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.command('ores').callback(interaction, None, None)
         self.assertEqual(self.sent(interaction),
                          '**ELMUNDOFOO** (Olympus): 5 deep ore deposits.\nTitanium 3 · Gold 1 · Super Cooled Ice 1\n'
-                         'For the map, open <https://faysm.github.io/IcarusOreDeposit/> and drop `ELMUNDOFOO.json` on it.')
+                         'For a map you can filter and zoom, open <https://faysm.github.io/IcarusOreDeposit/> and drop `ELMUNDOFOO.json` on it.')
         files = self.files(interaction)
         self.assertEqual(files['ELMUNDOFOO.json'], raw)
         self.assertIn(b'Titanium (3)', files['ELMUNDOFOO-deep-ores.txt'])
+        self.assertEqual(files['ELMUNDOFOO-deep-ores.jpg'][:3], b'\xff\xd8\xff')
+        self.assertEqual(list(files), ['ELMUNDOFOO-deep-ores.jpg', 'ELMUNDOFOO-deep-ores.txt', 'ELMUNDOFOO.json'])
         self.assertEqual(self.runner.calls, [])
 
     async def test_ores_for_one_ore_in_a_named_world(self):
@@ -237,7 +239,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('ores').callback(interaction, 'elmundofoo', 'Titanium')
         self.assertTrue(self.sent(interaction).startswith(
-            '**ELMUNDOFOO** (Olympus): 3 Titanium deep ore deposits in A1 ×2, P16.\nFor the map'))
+            '**ELMUNDOFOO** (Olympus): 3 Titanium deep ore deposits in A1 ×2, P16.\nFor a map'))
 
     async def test_ores_falls_back_to_the_backup_save(self):
         self.add_save('ELMUNDOFOO', b'{"half written')

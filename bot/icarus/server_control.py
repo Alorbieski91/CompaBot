@@ -16,6 +16,11 @@ from discord import app_commands
 
 from .mod_update import ModError, ModUpdater
 from .ore_deposits import ORE_MAP_SITE, ORES, ProspectError, listing, ore_label, read_deposits, summary
+
+try:
+    from . import ore_map
+except ImportError:  # Pillow not installed yet; /server ores still lists the deposits
+    ore_map = None
 from .steam_query import Info, query_info
 
 log = logging.getLogger('compabot.server')
@@ -482,11 +487,18 @@ def install_server_commands(bot, control):
             await interaction.followup.send(str(error))
             return
         text = fit(summary(prospect, found_map, deposits, ore), 1800)
-        files = [discord.File(io.BytesIO(listing(prospect, found_map, deposits).encode('utf-8')),
-                              filename=f'{prospect}-deep-ores.txt')]
-        if len(raw) <= MAX_ATTACHMENT:
+        files, size = [], 0
+        if ore_map:
+            image = await asyncio.to_thread(ore_map.render, prospect, found_map, deposits, ore)
+            files.append(discord.File(io.BytesIO(image), filename=f'{prospect}-deep-ores.jpg'))
+            size = len(image)
+        else:
+            text += '\nInstall the requirements (`pip install -r requirements.txt`) for a map picture.'
+        files.append(discord.File(io.BytesIO(listing(prospect, found_map, deposits).encode('utf-8')),
+                                  filename=f'{prospect}-deep-ores.txt'))
+        if size + len(raw) <= MAX_ATTACHMENT:
             files.append(discord.File(io.BytesIO(raw), filename=f'{prospect}.json'))
-            text += f'\nFor the map, open <{ORE_MAP_SITE}> and drop `{prospect}.json` on it.'
+            text += f'\nFor a map you can filter and zoom, open <{ORE_MAP_SITE}> and drop `{prospect}.json` on it.'
         else:
             text += f'\nThe save is too big to attach here, so get `{prospect}.json` from the server for <{ORE_MAP_SITE}>.'
         await interaction.followup.send(text, files=files)
