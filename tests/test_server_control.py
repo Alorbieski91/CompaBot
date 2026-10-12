@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 from Compabot import create_bot
 from bot.icarus.mod_update import ModError
-from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, install_server_commands, players_online, read_config, run_process
+from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, install_server_commands, players_online, read_config, run_process
 from bot.icarus.steam_query import Info
 from tests.test_ore_deposits import WORLD, save
 
@@ -343,6 +343,16 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         await first
         self.assertIsNone(self.bot.server.busy)
         self.assertEqual(len(self.runner.calls), 1)
+
+    async def test_wait_ready(self):
+        control = self.bot.server
+        loading, ready = {'running': True, 'ready': False}, {'running': True, 'ready': True}
+        control.status = AsyncMock(side_effect=[loading, ServerError('busy'), ready])
+        self.assertEqual(await control.wait_ready(timeout=5, poll=0), 'ready')
+        control.status = AsyncMock(side_effect=[loading, {'running': False}])
+        self.assertEqual(await control.wait_ready(timeout=5, poll=0), 'closed')
+        control.status = AsyncMock(return_value=loading)
+        self.assertEqual(await control.wait_ready(timeout=0, poll=0), 'loading')
 
     async def test_slow_action_keeps_running_after_reply(self):
         self.runner.gate = asyncio.Event()

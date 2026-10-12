@@ -21,6 +21,13 @@ class FakeControl:
         self.busy = None
         self.ran = []
         self.codes = {}
+        self.loads = []  # what each start's wait_ready reports; 'ready' once these run out
+
+    async def wait_ready(self):
+        result = self.loads.pop(0) if self.loads else 'ready'
+        if result == 'closed':
+            self.running = False
+        return result
 
     async def status(self):
         if not self.running:
@@ -88,7 +95,7 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         hours = self.make(control, at(2026, 10, 6, 6, 0))
         await hours.check()
         self.assertEqual(control.ran, ['start'])
-        self.assertEqual(self.posts, ['**CompaWorld** was started at 6:00 AM for the day.'])
+        self.assertEqual(self.posts, ['**CompaWorld** was started at 6:00 AM for the day and is ready for players.'])
 
     async def test_morning_restarts_an_empty_running_server(self):
         control = FakeControl(running=True)
@@ -126,8 +133,38 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         control.codes['start'] = 1
         hours = self.make(control, at(2026, 10, 6, 6, 0))
         await hours.check()
-        self.assertIn('did not start', self.posts[0])
+        self.assertIn('did not come up', self.posts[0])
         self.assertIn('exit code 1', self.posts[0])
+
+    async def test_starts_again_if_the_server_closes_while_loading(self):
+        control = FakeControl()
+        control.loads = ['closed']
+        hours = self.make(control, at(2026, 10, 12, 6, 0))
+        await hours.check()
+        self.assertEqual(control.ran, ['start', 'start'])
+        self.assertTrue(control.running)
+        self.assertEqual(self.posts, ['**CompaWorld** was started at 6:00 AM for the day and is ready for players. '
+                                      'It closed while loading the first time, so I started it again.'])
+
+    async def test_reports_a_server_that_keeps_closing(self):
+        control = FakeControl()
+        control.loads = ['closed', 'closed']
+        hours = self.make(control, at(2026, 10, 12, 6, 0))
+        await hours.check()
+        await hours.check()  # reported once, not retried every poll
+        self.assertEqual(control.ran, ['start', 'start'])
+        self.assertIn('did not come up', self.posts[0])
+        self.assertIn('closed while loading, twice', self.posts[0])
+        self.assertEqual(len(self.posts), 1)
+
+    async def test_reports_a_server_stuck_loading(self):
+        control = FakeControl(running=True)
+        control.loads = ['loading']
+        hours = self.make(control, at(2026, 10, 12, 6, 0))
+        await hours.check()
+        self.assertEqual(control.ran, ['stop', 'start'])
+        self.assertIn('did not come back up', self.posts[0])
+        self.assertIn('still not ready for players after 5 minutes', self.posts[0])
 
     async def test_follows_daylight_saving(self):
         # 6:00 AM Central is 11:00 UTC in summer and 12:00 UTC once the clocks go back.

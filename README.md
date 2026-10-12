@@ -180,6 +180,10 @@ a start, and scheduled stops are not reported as outages. If another `/server` a
 at that time, or Compabot was restarting, it tries again every 30 seconds for up to an hour, then
 waits for the next day.
 
+After a 6:00 AM start or restart, Compabot waits up to 5 minutes for the server log to say it is
+ready for players before posting. If the server closes while loading, it starts it once more, and
+if it closes again or is still loading after 5 minutes, the post says so instead.
+
 Set `SERVER_START_TIME` and `SERVER_STOP_TIME` in `.env` to other 24-hour times (like `07:30`),
 or to `off` to turn either one off. `SERVER_TIMEZONE` defaults to `America/Chicago`, which follows
 daylight saving time. Run `pip install -r requirements.txt` again after updating, since Windows
