@@ -1,5 +1,6 @@
 """/server commands that run the Icarus PowerShell scripts on this Windows host."""
 import asyncio
+import io
 import json
 import logging
 import os
@@ -14,6 +15,12 @@ import discord
 from discord import app_commands
 
 from .mod_update import ModError, ModUpdater
+from .ore_deposits import ORE_MAP_SITE, ORES, ProspectError, listing, ore_label, read_deposits, summary
+
+try:
+    from . import ore_map
+except ImportError:  # Pillow not installed yet; /server ores still lists the deposits
+    ore_map = None
 from .steam_query import Info, query_info
 
 log = logging.getLogger('compabot.server')
@@ -35,6 +42,10 @@ JOINED = re.compile(r'Join succeeded: (.+)')
 CLOSED = re.compile(r'UNetConnection::Close: \[UNetConnection\] RemoteAddr: ([^,\s]+)')
 # Discord shows at most 25 autocomplete choices.
 MAX_CHOICES = 25
+# Stay under Discord's 10 MB upload limit for servers without boosts.
+MAX_ATTACHMENT = 9 * 1024 * 1024
+# Prospect saves are around 1 MB; refuse anything far bigger before downloading it.
+MAX_UPLOAD = 50 * 1024 * 1024
 
 
 class ServerError(Exception):
@@ -210,6 +221,40 @@ class ServerControl:
             raise ServerError(f'There is no saved world called `{discord.utils.escape_markdown(name)}`. '
                               f'Saved worlds: {known}.')
         return prospect
+
+    def current_prospect(self):
+        """The prospect the server loads next (LastProspectName), the only saved one, or None."""
+        try:
+            raw = self.settings_file.read_bytes()
+        except OSError:
+            raw = b''
+        text = raw.decode('utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8-sig', 'replace')
+        match = re.search(r'^\s*LastProspectName\s*=\s*(\S+)', text, re.M)
+        saved = self.prospects()
+        if match and match[1] in saved:
+            return match[1]
+        return saved[0] if len(saved) == 1 else None
+
+    def read_prospect(self, name):
+        """Return (prospect name, save file bytes, map, deposits) for a saved prospect.
+
+        The running server keeps the file and may be rewriting it, so a save that reads
+        half-written is retried once and then read from its newest .backup.
+        """
+        prospect = self.saved_prospect(name) if name else self.current_prospect()
+        if not prospect:
+            known = ', '.join(f'`{p}`' for p in self.prospects()) or 'none'
+            raise ServerError(f'Pick a world. Saved worlds: {known}.')
+        path = self.prospects_dir / f'{prospect}.json'
+        error = None
+        for attempt, wait in ((path, 0.5), (path, 0), (path.with_name(path.name + '.backup'), 0)):
+            try:
+                raw = attempt.read_bytes()
+                return (prospect, raw, *read_deposits(raw))
+            except (OSError, ProspectError) as caught:
+                error = caught
+                time.sleep(wait)
+        raise ServerError(f"Couldn't read the **{prospect}** save: {error}")
 
     async def choose_prospect(self, name):
         """Point the server at a saved prospect for its next start. Returns the prospect's saved name.
@@ -423,6 +468,62 @@ def install_server_commands(bot, control):
             return text + '\n' + report('Start', *await control.run_action('start', window=window))
         except ServerError as error:
             return text + f'\n{error}\nThe server was not started.'
+
+    async def ores(interaction: discord.Interaction, current: str):
+        if interaction.user.id not in control.admins:
+            return []
+        return [app_commands.Choice(name=ore_label(ore), value=ore) for ore in ORES
+                if current.lower() in ore_label(ore).lower()][:MAX_CHOICES]
+
+    async def read_upload(file):
+        name = Path(file.filename).stem or 'Prospect'
+        if not file.filename.lower().endswith('.json'):
+            raise ServerError(f'`{discord.utils.escape_markdown(file.filename)}` is not a prospect save. Upload the .json '
+                              r'from `%LOCALAPPDATA%\Icarus\Saved\PlayerData\<your Steam ID>\Prospects`.')
+        if file.size > MAX_UPLOAD:
+            raise ServerError(f'`{discord.utils.escape_markdown(file.filename)}` is too big to be a prospect save.')
+        try:
+            raw = await file.read()
+            return (name, raw, *await asyncio.to_thread(read_deposits, raw))
+        except (discord.HTTPException, ProspectError) as error:
+            raise ServerError(f"Couldn't read `{discord.utils.escape_markdown(file.filename)}`: {error}") from None
+
+    @server.command(name='ores', description='List the deep ore deposits in a saved world and attach its save for the ore map site.')
+    @app_commands.describe(world='Saved world (prospect). Leave empty for the one the server loads.',
+                           ore='Only list where this ore is.',
+                           file='A prospect .json from your own PC to read instead of a server world.')
+    @app_commands.autocomplete(world=worlds, ore=ores)
+    async def deep_ores(interaction: discord.Interaction, world: Optional[str] = None, ore: Optional[str] = None,
+                        file: Optional[discord.Attachment] = None):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            if file:
+                prospect, raw, found_map, deposits = await read_upload(file)
+            else:
+                prospect, raw, found_map, deposits = await asyncio.to_thread(control.read_prospect, world)
+        except ServerError as error:
+            await interaction.followup.send(str(error))
+            return
+        text = fit(summary(prospect, found_map, deposits, ore), 1800)
+        files, size = [], 0
+        if ore_map:
+            image = await asyncio.to_thread(ore_map.render, prospect, found_map, deposits, ore)
+            files.append(discord.File(io.BytesIO(image), filename=f'{prospect}-deep-ores.jpg'))
+            size = len(image)
+        else:
+            text += '\nInstall the requirements (`pip install -r requirements.txt`) for a map picture.'
+        files.append(discord.File(io.BytesIO(listing(prospect, found_map, deposits).encode('utf-8')),
+                                  filename=f'{prospect}-deep-ores.txt'))
+        if file:  # they already have the save they uploaded
+            pass
+        elif size + len(raw) <= MAX_ATTACHMENT:
+            files.append(discord.File(io.BytesIO(raw), filename=f'{prospect}.json'))
+            text += f'\nFor a map you can filter and zoom, open <{ORE_MAP_SITE}> and drop `{prospect}.json` on it.'
+        else:
+            text += f'\nThe save is too big to attach here, so get `{prospect}.json` from the server for <{ORE_MAP_SITE}>.'
+        await interaction.followup.send(text, files=files)
 
     @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
     async def stop(interaction: discord.Interaction):
