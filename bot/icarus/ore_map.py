@@ -1,4 +1,4 @@
-"""Draw a world's deep ore deposits on its 16 x 16 map grid as an image, like the ore map site.
+"""Draw a world's deep ore deposits and oil wells on its 16 x 16 map grid as an image, like the ore map site.
 
 Compabot ships no map artwork. Put a square top-down image of a map in data/maps, named
 after the map (Olympus.jpg, Elysium.png, ...), and the deposits are drawn over it;
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .ore_deposits import COLUMNS, GRID, MAP_EDGE, by_ore, ore_label
+from .ore_deposits import COLUMNS, GRID, MAP_EDGE, OIL, by_ore, ore_label, split_oil
 
 MAPS_DIR = Path(__file__).resolve().parents[2] / 'data' / 'maps'
 MAP_SIZE = 1600
@@ -37,6 +37,7 @@ CODES = {
     'Exotic': ('Ex', MAGENTA), 'Exotic_Red_Raw': ('Rx', MAGENTA), 'Exotic_Raw_Uranium': ('U', MAGENTA),
     'Stone': ('St', GREEN), 'Clay': ('Cy', GREEN), 'Limestone': ('Ls', GREEN), 'Frozen_Wood': ('Wd', GREEN),
     'Obsidian': ('Ob', VIOLET), 'Scoria': ('Sc', VIOLET),
+    OIL: ('Oil', '#f0efec'),
 }
 FONTS = ('arialbd.ttf', 'arial.ttf', 'DejaVuSans-Bold.ttf', 'DejaVuSans.ttf')
 
@@ -115,9 +116,14 @@ def render(prospect, world, deposits, ore=None, maps_dir=None):
     left = MAP_SIZE + 28
     draw.text((left, 28), prospect, font=font(34), fill=TEXT)
     draw.text((left, 74), world, font=font(22), fill=TEXT_SECONDARY)
-    draw.text((left, 102), f'{len(deposits)} deep ore deposits', font=font(22), fill=TEXT_SECONDARY)
-    row_font, y = font(22), 152
-    for name, group in by_ore(deposits):
+    ores, wells = split_oil(deposits)
+    counts = [f'{n} {what}' for n, what in ((len(ores), 'deep ore deposits'), (len(wells), 'oil wells')) if n]
+    y = 102
+    for line in counts or ['Nothing found']:
+        draw.text((left, y), line, font=font(22), fill=TEXT_SECONDARY)
+        y += 28
+    row_font, y = font(22), y + 22
+    for name, group in by_ore(ores) + by_ore(wells):
         text, color = code(name)
         fill = rgb(color)
         draw.ellipse([left, y, left + 30, y + 30], fill=fill)

@@ -15,6 +15,13 @@ def deposit(ore, x, y, z=0.0):
             + struct.pack('<fff', x, y, z) + b'more junk')
 
 
+def oil_well(x, y, z=0.0):
+    """One oil well record: its transform comes first, then its own Vector-typed fields."""
+    return (b'/Script/Icarus.OilGeyserRecorderComponent\0BinaryData\0ActorTransform\0Rotation\0Quat\0' + b'\0' * 16
+            + b'Translation\0StructProperty\0' + b'Vector\0' + b'\x07' * 16 + b'\0' + struct.pack('<fff', x, y, z)
+            + b'Scale3D\0StructProperty\0Vector\0' + b'\x07' * 17 + struct.pack('<fff', 1, 1, 1))
+
+
 def save(data, bom=b''):
     blob = base64.b64encode(zlib.compress(data)).decode()
     text = json.dumps({'ProspectInfo': {'ProspectID': 'TEST'}, 'ProspectBlob': {'BinaryBlob': blob}}, indent='\t')
@@ -25,12 +32,28 @@ WORLD = (b'/Game/Terrain_016/Terrain_016' + deposit('Titanium', -400000, -400000
          + deposit('Titanium', 402000, 402000) + deposit('Titanium', -399000, -380000) + deposit('Super_Cooled_Ice', 0, 0))
 
 
+OILY = WORLD + oil_well(-310000, 140000) + oil_well(-311000, 139000) + oil_well(113000, -244000)
+
+
 class OreDepositTests(unittest.TestCase):
     def test_finds_map_and_deposits(self):
         world, deposits = find_deposits(WORLD)
         self.assertEqual(world, 'Olympus')
         self.assertEqual([(d.ore, d.cell) for d in deposits],
                          [('Titanium', 'A1'), ('Gold', 'I9'), ('Titanium', 'P16'), ('Titanium', 'A1'), ('Super_Cooled_Ice', 'I9')])
+
+    def test_finds_oil_wells_after_the_ores(self):
+        world, deposits = find_deposits(OILY)
+        self.assertEqual([(d.ore, d.cell) for d in deposits[5:]], [('Oil', 'B11'), ('Oil', 'B11'), ('Oil', 'K4')])
+        self.assertEqual(summary('ELMUNDOFOO', world, deposits),
+                         '**ELMUNDOFOO** (Olympus): 5 deep ore deposits.\nTitanium 3 · Gold 1 · Super Cooled Ice 1\n'
+                         'Oil wells: 3 in B11 ×2, K4.')
+        self.assertEqual(summary('ELMUNDOFOO', world, deposits, 'oil'), '**ELMUNDOFOO** (Olympus): 3 oil wells in B11 ×2, K4.')
+        self.assertEqual(summary('ELMUNDOFOO', world, deposits[:5], 'Oil'), '**ELMUNDOFOO** (Olympus) has no oil wells.')
+        text = listing('ELMUNDOFOO', world, deposits)
+        self.assertIn('ELMUNDOFOO (Olympus): 5 deep ore deposits, 3 oil wells\n', text)
+        self.assertTrue(text.rstrip().endswith('Oil wells (3)\n  B11  x   -311000  y    139000\n'
+                                               '  B11  x   -310000  y    140000\n  K4   x    113000  y   -244000'))
 
     def test_grid_matches_the_ore_map_site(self):
         self.assertEqual(grid_cell(-403200, -403200), 'A1')
