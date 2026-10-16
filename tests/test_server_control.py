@@ -74,11 +74,11 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_registration(self):
         group = self.bot.tree.get_command('server')
-        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'backup', 'update', 'mods', 'ores'})
+        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'restart', 'backup', 'update', 'mods', 'ores'})
         group.to_dict(self.bot.tree)
 
     async def test_non_admins_are_refused_before_anything_runs(self):
-        for name in ('status', 'stop', 'backup', 'update', 'mods'):
+        for name in ('status', 'stop', 'restart', 'backup', 'update', 'mods'):
             interaction = self.interaction(user=99)
             await self.command(name).callback(interaction)
             self.assertIn('Only the server admins', interaction.response.send_message.call_args.args[0])
@@ -343,6 +343,83 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         await first
         self.assertIsNone(self.bot.server.busy)
         self.assertEqual(len(self.runner.calls), 1)
+
+    def restart_server(self, *states, loads=('ready',)):
+        """Run /server restart with status() returning states in order and wait_ready() returning loads."""
+        control = self.bot.server
+        control.status = AsyncMock(side_effect=list(states))
+        control.wait_ready = AsyncMock(side_effect=list(loads))
+        order = []
+        runner = self.runner
+        async def tracking(argv, env=None):
+            order.append(Path(argv[-1]).name)
+            self.assertEqual(control.busy, 'stop' if order[-1].startswith('Stop') else 'start')
+            return await runner(argv, env)
+        control.run = tracking
+        interaction = self.interaction()
+        return interaction, order, self.command('restart').callback(interaction)
+
+    async def test_restart_stops_then_starts_and_waits_until_ready(self):
+        running = {'running': True, 'started': 1000, 'players': Info(0, 2)}
+        interaction, order, call = self.restart_server(running, {'running': False})
+        await call
+        self.assertEqual(order, ['Stop-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
+        self.bot.server.wait_ready.assert_awaited_once()
+        self.assertEqual(self.sent(interaction), '**CompaWorld** restarted and is ready for players.')
+        self.assertIsNone(self.bot.server.busy)
+        self.assertIsNone(self.bot.server.holder)
+
+    async def test_restart_refuses_while_someone_is_on(self):
+        for players, who in ((Info(1, 2, ('nscript',)), 'nscript is online'), (Info(2, 2), '2 players are online')):
+            interaction, order, call = self.restart_server({'running': True, 'started': 1000, 'players': players})
+            await call
+            self.assertEqual(order, [])
+            self.assertEqual(self.sent(interaction), f'{who} on **CompaWorld**, so I did not restart it.')
+            self.assertIsNone(self.bot.server.busy)
+
+    async def test_restart_does_not_start_when_stop_fails(self):
+        self.runner.result = (1, 'The server did not exit within 30 seconds.')
+        interaction, order, call = self.restart_server({'running': True, 'started': 1000, 'players': Info(0, 2)})
+        await call
+        self.assertEqual(order, ['Stop-IcarusServer.ps1'])
+        self.assertIn('Stop failed (exit code 1)', self.sent(interaction))
+        self.assertIn('The server was not started again.', self.sent(interaction))
+        self.assertIsNone(self.bot.server.busy)
+
+    async def test_restart_does_not_start_while_server_still_runs(self):
+        running = {'running': True, 'started': 1000, 'players': Info(0, 2)}
+        interaction, order, call = self.restart_server(running, running)
+        await call
+        self.assertEqual(order, ['Stop-IcarusServer.ps1'])
+        self.assertIn('still looks like it is running', self.sent(interaction))
+
+    async def test_restart_starts_a_stopped_server_and_retries_a_failed_load(self):
+        interaction, order, call = self.restart_server({'running': False}, loads=('closed', 'ready'))
+        await call
+        self.assertEqual(order, ['Start-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
+        self.assertEqual(self.sent(interaction), '**CompaWorld** was not running, so I just started it.\nIt is ready '
+                         'for players. It closed while loading the first time, so I started it again.')
+
+    async def test_restart_keeps_other_actions_out_until_it_finishes(self):
+        control = self.bot.server
+        running = {'running': True, 'started': 1000, 'players': Info(0, 2)}
+        ready = asyncio.Event()
+        async def wait_ready():
+            await ready.wait()
+            return 'ready'
+        control.status = AsyncMock(side_effect=[running, {'running': False}])
+        control.wait_ready = wait_ready
+        restart = asyncio.create_task(self.command('restart').callback(self.interaction()))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        self.assertEqual(control.busy, 'restart')
+        other = self.interaction()
+        await self.command('stop').callback(other)
+        self.assertEqual(self.sent(other), 'Restart is still running. Try again when it finishes.')
+        ready.set()
+        await restart
+        self.assertEqual(len(self.runner.calls), 2)
+        self.assertIsNone(control.busy)
 
     async def test_wait_ready(self):
         control = self.bot.server
