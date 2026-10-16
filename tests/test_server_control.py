@@ -359,14 +359,19 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         return interaction, order, self.command('restart').callback(interaction)
 
-    async def test_stop_refuses_while_someone_is_on(self):
+    async def test_stop_refuses_while_someone_is_on_unless_forced(self):
         control = self.bot.server
         control.status = AsyncMock(return_value={'running': True, 'started': 1000, 'players': Info(1, 2, ('nscript',))})
         interaction = self.interaction()
         await self.command('stop').callback(interaction)
-        self.assertEqual(self.sent(interaction), 'nscript is online on **CompaWorld**, so I did not stop it.')
+        self.assertEqual(self.sent(interaction), 'nscript is online on **CompaWorld**, so I did not stop it. '
+                         'Use `/server stop force:True` to stop it anyway.')
         self.assertEqual(self.runner.calls, [])
         self.assertIsNone(control.busy)
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction, True)
+        self.assertEqual(self.scripts_run(), ['Stop-IcarusServer.ps1'])
+        self.assertIn('Stop finished.', self.sent(interaction))
 
     async def test_stop_runs_when_nobody_is_on(self):
         control = self.bot.server

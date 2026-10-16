@@ -137,12 +137,17 @@ class ServerControl:
         else:
             log.info('%s exited with %s:\n%s', action, *task.result())
 
-    async def stop(self, window=None):
-        """Stop the server for /server stop, refusing while anyone is online. Returns (exit code, output)."""
-        self.check_free()
-        state = await self.status()
-        if state['running'] and state['players'].players:
-            raise ServerError(f'{online(state["players"])} on **{self.name}**, so I did not stop it.')
+    async def stop(self, force=False, window=None):
+        """Stop the server for /server stop. Returns (exit code, output).
+
+        Refuses while anyone is online unless force is set.
+        """
+        if not force:
+            self.check_free()
+            state = await self.status()
+            if state['running'] and state['players'].players:
+                raise ServerError(f'{online(state["players"])} on **{self.name}**, so I did not stop it. '
+                                  'Use `/server stop force:True` to stop it anyway.')
         return await self.run_action('stop', window=window)
 
     async def restart(self, window=None):
@@ -627,13 +632,14 @@ def install_server_commands(bot, control):
             text += f'\nThe save is too big to attach here, so get `{prospect}.json` from the server for <{ORE_MAP_SITE}>.'
         await interaction.followup.send(text, files=files)
 
-    @server.command(name='stop', description='Close the Icarus server safely and take a final backup (only when nobody is on).')
-    async def stop(interaction: discord.Interaction):
+    @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
+    @app_commands.describe(force='Stop it even if players are online.')
+    async def stop(interaction: discord.Interaction, force: bool = False):
         if not await allowed(interaction):
             return
         await interaction.response.defer(thinking=True)
         try:
-            text = report('Stop', *await control.stop())
+            text = report('Stop', *await control.stop(force))
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(text)
