@@ -120,6 +120,25 @@ the latest mod, Compabot keeps the mod and warns that laanp has not caught up ye
 installs a mod made for a newer game than the server has. Other mods are left alone.
 Your own game client needs the same mod file in its own `Content\Paks\mods` folder.
 
+#### Updating the mods in your own game
+
+Your game needs the same mod file as the server. `clients\Update-IcarusClientMods.cmd` does on a
+gaming PC what `/server mods` does on the server, and needs only Windows (no Python or Compabot).
+Close Icarus and double-click it. It finds Icarus through Steam, checks each laanp mod in
+`Icarus\Content\Paks\mods` with the same rules as the server (the latest release, unless its
+readme says it needs a newer game build than yours), downloads it, checks it is a real `.pak`,
+and moves the old file to `%LOCALAPPDATA%\IcarusModBackups` (the last 5 per mod are kept). If no
+laanp mod is installed yet, it installs Pete's Beacon Teleport. It refuses to change anything
+while Icarus is running.
+
+To hand it to a friend, send them both files from the `clients` folder and have them keep the two
+together. From PowerShell you can also run it with options:
+
+```powershell
+.\Update-IcarusClientMods.ps1 -CheckOnly                    # only say what would change
+.\Update-IcarusClientMods.ps1 -GamePath 'D:\Games\Icarus'    # if Steam lookup misses your install
+```
+
 
 ### Automatic game and mod updates
 
