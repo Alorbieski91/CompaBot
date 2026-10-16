@@ -28,7 +28,8 @@ log = logging.getLogger('compabot.server')
 DEFAULT_SCRIPTS_DIR = r'C:\IcarusServer\scripts'
 SCRIPTS = {'start': 'Start-IcarusServer.ps1', 'stop': 'Stop-IcarusServer.ps1',
            'backup': 'Backup-IcarusServer.ps1', 'update': 'Update-IcarusServer.ps1'}
-LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update', 'mods': 'Mod update'}
+LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update', 'mods': 'Mod update',
+          'restart': 'Restart'}
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
 STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
@@ -93,6 +94,7 @@ class ServerControl:
         self.query = query_info
         self.windows = os.name == 'nt'
         self.busy = None
+        self.holder = None  # the task running a restart, which may run its own stop and start
         self.stopped_at = float('-inf')
         self.reply_window = REPLY_WINDOW
         self.mods = ModUpdater(self.install_root)
@@ -105,13 +107,11 @@ class ServerControl:
         script = self.scripts_dir / SCRIPTS[action]
         if not script.is_file():
             raise ServerError(f'Script not found: {script}')
-        if self.busy:
-            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+        self.check_free()
         if action == 'backup':
             if (await self.status())['running']:
                 raise ServerError(RUNNING_BACKUP.format(name=f'**{self.name}**'))
-            if self.busy:  # another action started during the status check
-                raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+            self.check_free()  # another action may have started during the status check
         self.busy = action
         if action == 'stop':
             self.stopped_at = time.time()
@@ -122,14 +122,69 @@ class ServerControl:
         except asyncio.TimeoutError:
             return None, ''
 
+    def check_free(self):
+        """Refuse if another action is running, unless it is a restart and this is that restart's own step."""
+        if self.busy and not (self.busy == 'restart' and asyncio.current_task() is self.holder):
+            raise ServerError(f'{LABELS[self.busy]} is still running. Try again when it finishes.')
+
     def _finished(self, action, task):
-        self.busy = None
+        # A restart keeps everything else out between its stop and its start.
+        self.busy = 'restart' if self.holder else None
         if task.cancelled():
             return
         if task.exception():
             log.error('%s failed', action, exc_info=task.exception())
         else:
             log.info('%s exited with %s:\n%s', action, *task.result())
+
+    async def stop(self, force=False, window=None):
+        """Stop the server for /server stop. Returns (exit code, output).
+
+        Refuses while anyone is online unless force is set.
+        """
+        if not force:
+            self.check_free()
+            state = await self.status()
+            if state['running'] and state['players'].players:
+                raise ServerError(f'{online(state["players"])} on **{self.name}**, so I did not stop it. '
+                                  'Use `/server stop force:True` to stop it anyway.')
+        return await self.run_action('stop', window=window)
+
+    async def restart(self, window=None):
+        """Stop the server, make sure it has closed, then start it and wait until it is ready. Returns a report.
+
+        Refuses while anyone is online. The whole restart counts as one action, so the schedule, the
+        auto-updater and other commands can't slip in between the stop and the start.
+        """
+        began = time.monotonic()
+        window = self.reply_window if window is None else window
+        name = f'**{self.name}**'
+        self.check_free()
+        state = await self.status()
+        self.check_free()  # another action may have started during the status check
+        if state['running'] and state['players'].players:
+            raise ServerError(f'{online(state["players"])} on {name}, so I did not restart it.')
+        self.busy, self.holder = 'restart', asyncio.current_task()
+        try:
+            text, failed = '', f'{name} was stopped, but it did not come back up.'
+            if state['running']:
+                code, output = await self.run_action('stop', window=window)
+                if code != 0:
+                    return report('Stop', code, output) + '\nThe server was not started again.'
+                if (await self.status())['running']:
+                    return f'{name} still looks like it is running after the stop, so I did not start it again.'
+            else:
+                text, failed = f'{name} was not running, so I just started it.\n', 'It did not come up.'
+            problem, retried = await launch(self, max(1, window - (time.monotonic() - began)))
+            if problem:
+                return text + f'{failed}\n{problem}'
+            again = ' It closed while loading the first time, so I started it again.' if retried else ''
+            done = 'It is ready for players.' if text else f'{name} restarted and is ready for players.'
+            return text + done + again
+        finally:
+            self.holder = None
+            if self.busy == 'restart':
+                self.busy = None
 
     async def update_with_mods(self, window=None):
         """Update the game, then its mods if that worked. Returns (update exit code, report)."""
@@ -325,6 +380,33 @@ class ServerControl:
         if saved is None or (state['backup'] and state['backup'] >= saved):
             return 'newest backup is up to date'
         return await self.run_action('backup')
+
+
+async def launch(control, window):
+    """Start the server and wait until it accepts players, starting it once more if it closes while loading.
+
+    Returns (problem or None, whether it had to be started twice).
+    """
+    for attempt in (1, 2):
+        code, output = await control.run_action('start', window=window)
+        if code != 0:
+            return report('Start', code, output), attempt > 1
+        result = await control.wait_ready()
+        if result == 'ready':
+            return None, attempt > 1
+        if result == 'loading':
+            return (f'It is running but still not ready for players after {READY_TIMEOUT // 60} minutes. '
+                    'Check `/server status`; if it stays this way, try `/server restart`.'), attempt > 1
+        log.warning('The server closed while loading (start %s of 2)', attempt)
+    return ('It closed while loading, twice, without a crash report. '
+            'Check `data\\Saved\\Logs` on the PC, then try `/server start`.'), True
+
+
+def online(players):
+    """'nscript is online' or '2 players are online'."""
+    if players.names:
+        return f'{" and ".join(players.names)} {"is" if len(players.names) == 1 else "are"} online'
+    return f'{players.players} {"player is" if players.players == 1 else "players are"} online'
 
 
 def players_online(log_text):
@@ -551,8 +633,27 @@ def install_server_commands(bot, control):
         await interaction.followup.send(text, files=files)
 
     @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
-    async def stop(interaction: discord.Interaction):
-        await run(interaction, 'stop')
+    @app_commands.describe(force='Stop it even if players are online.')
+    async def stop(interaction: discord.Interaction, force: bool = False):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            text = report('Stop', *await control.stop(force))
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
+
+    @server.command(name='restart', description='Stop the Icarus server, wait for it to close, then start it again (only when nobody is on).')
+    async def restart(interaction: discord.Interaction):
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            text = await control.restart()
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(fit(text))
 
     @server.command(name='backup', description='Back up the Icarus save files now.')
     async def backup(interaction: discord.Interaction):
