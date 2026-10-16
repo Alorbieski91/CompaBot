@@ -137,6 +137,14 @@ class ServerControl:
         else:
             log.info('%s exited with %s:\n%s', action, *task.result())
 
+    async def stop(self, window=None):
+        """Stop the server for /server stop, refusing while anyone is online. Returns (exit code, output)."""
+        self.check_free()
+        state = await self.status()
+        if state['running'] and state['players'].players:
+            raise ServerError(f'{online(state["players"])} on **{self.name}**, so I did not stop it.')
+        return await self.run_action('stop', window=window)
+
     async def restart(self, window=None):
         """Stop the server, make sure it has closed, then start it and wait until it is ready. Returns a report.
 
@@ -619,9 +627,16 @@ def install_server_commands(bot, control):
             text += f'\nThe save is too big to attach here, so get `{prospect}.json` from the server for <{ORE_MAP_SITE}>.'
         await interaction.followup.send(text, files=files)
 
-    @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
+    @server.command(name='stop', description='Close the Icarus server safely and take a final backup (only when nobody is on).')
     async def stop(interaction: discord.Interaction):
-        await run(interaction, 'stop')
+        if not await allowed(interaction):
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            text = report('Stop', *await control.stop())
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
 
     @server.command(name='restart', description='Stop the Icarus server, wait for it to close, then start it again (only when nobody is on).')
     async def restart(interaction: discord.Interaction):
