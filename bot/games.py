@@ -33,6 +33,9 @@ class GameProfile:
     ready_line: str  # log text that means players can join; {port} is the game port
     log_format: str  # how the server log records joins and leaves: 'icarus' or 'valheim'
     features: frozenset = field(default_factory=frozenset)  # extras: mods, worlds, ores
+    # Whether the shared SERVER_START_TIME/SERVER_STOP_TIME schedule runs this game when its
+    # <KEY>_ACTIVE_HOURS setting in .env is blank.
+    active_hours: bool = True
 
     def supports(self, feature):
         return feature in self.features
@@ -85,6 +88,7 @@ VALHEIM = GameProfile(
     # Logged once the world is loaded and the server is signed in to Steam.
     ready_line='Game server connected',
     log_format='valheim',
+    active_hours=False,  # not being played for now; VALHEIM_ACTIVE_HOURS=on turns it on
 )
 
 GAMES = {game.key: game for game in (ICARUS, VALHEIM)}

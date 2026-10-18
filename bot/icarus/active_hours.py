@@ -1,4 +1,7 @@
-"""Keep the Icarus server up during active hours: close it at night if it is empty, start it each morning.
+"""Keep a game server up during active hours: close it at night if it is empty, start it each morning.
+
+Every game with active hours turned on follows the same start and stop times, each with its own
+ActiveHours.
 
 At the stop time (default 8:00 PM Central) the server is stopped if nobody is on; if someone is,
 it is left running. At the start time (default 6:00 AM) a stopped server is started, and one
@@ -10,7 +13,7 @@ import datetime
 import logging
 import time
 
-from .server_control import ServerError, launch, report
+from .server_control import ServerError, label, launch, report
 
 log = logging.getLogger('compabot.schedule')
 
@@ -62,32 +65,32 @@ class ActiveHours:
             try:
                 await self.check()
             except Exception:
-                log.exception('Scheduled start/stop check failed')
+                log.exception('Scheduled %s start/stop check failed', self.control.game.name)
             await asyncio.sleep(interval)
 
     async def check(self):
         for name, day in self.due():
             if self.control.busy:
-                log.info('Scheduled %s waiting: another server action is running', name)
+                log.info('Scheduled %s %s waiting: another server action is running', self.control.game.name, name)
                 continue
             try:
                 state = await self.control.status()
                 text = await (self.evening if name == 'stop' else self.morning)(state)
             except ServerError as error:
-                log.warning('Scheduled %s will retry: %s', name, error)
+                log.warning('Scheduled %s %s will retry: %s', self.control.game.name, name, error)
                 continue
             self.done[name] = day
             if text:
                 await self.notify(text)
 
     async def evening(self, state):
-        name, at = f'**{self.control.name}**', clock_time(self.events['stop'])
+        name, at = label(self.control), clock_time(self.events['stop'])
         if not state['running']:
-            log.info('Scheduled stop: the server is already off')
+            log.info('Scheduled stop: the %s server is already off', self.control.game.name)
             return None
         players = state['players']
         if players.players:
-            log.info('Scheduled stop skipped: %s player(s) online', players.players)
+            log.info('Scheduled %s stop skipped: %s player(s) online', self.control.game.name, players.players)
             return None
         code, output = await self.control.run_action('stop', window=SCRIPT_WINDOW)
         if code != 0:
@@ -97,7 +100,7 @@ class ActiveHours:
         return f'{name} was shut down at {at} because nobody was online.{again}'
 
     async def morning(self, state):
-        name, at = f'**{self.control.name}**', clock_time(self.events['start'])
+        name, at = label(self.control), clock_time(self.events['start'])
         again = ' It closed while loading the first time, so I started it again.'
         if not state['running']:
             problem, retried = await launch(self.control, SCRIPT_WINDOW)
@@ -106,7 +109,7 @@ class ActiveHours:
             return f'{name} was started at {at} for the day and is ready for players.{again if retried else ""}'
         players = state['players']
         if players.players:
-            log.info('Scheduled restart skipped: %s player(s) online', players.players)
+            log.info('Scheduled %s restart skipped: %s player(s) online', self.control.game.name, players.players)
             return None
         code, output = await self.control.run_action('stop', window=SCRIPT_WINDOW)
         if code != 0:

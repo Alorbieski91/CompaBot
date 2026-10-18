@@ -2,7 +2,7 @@ import datetime
 import unittest
 from zoneinfo import ZoneInfo
 
-from bot.games import ICARUS
+from bot.games import ICARUS, VALHEIM
 from bot.icarus.active_hours import ActiveHours, clock_time, parse_time
 from bot.icarus.server_control import ServerControl, ServerError
 from bot.icarus.steam_query import Info
@@ -82,7 +82,7 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         await hours.check()
         await hours.check()
         self.assertEqual(control.ran, ['stop'])
-        self.assertEqual(self.posts, ['**CompaWorld** was shut down at 8:00 PM because nobody was online. It starts again at 6:00 AM.'])
+        self.assertEqual(self.posts, ['**CompaWorld** (Icarus) was shut down at 8:00 PM because nobody was online. It starts again at 6:00 AM.'])
 
     async def test_evening_leaves_players_alone(self):
         control = FakeControl(running=True, players=1)
@@ -99,7 +99,7 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         hours = self.make(control, at(2026, 10, 6, 6, 0))
         await hours.check()
         self.assertEqual(control.ran, ['start'])
-        self.assertEqual(self.posts, ['**CompaWorld** was started at 6:00 AM for the day and is ready for players.'])
+        self.assertEqual(self.posts, ['**CompaWorld** (Icarus) was started at 6:00 AM for the day and is ready for players.'])
 
     async def test_morning_restarts_an_empty_running_server(self):
         control = FakeControl(running=True)
@@ -147,7 +147,7 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         await hours.check()
         self.assertEqual(control.ran, ['start', 'start'])
         self.assertTrue(control.running)
-        self.assertEqual(self.posts, ['**CompaWorld** was started at 6:00 AM for the day and is ready for players. '
+        self.assertEqual(self.posts, ['**CompaWorld** (Icarus) was started at 6:00 AM for the day and is ready for players. '
                                       'It closed while loading the first time, so I started it again.'])
 
     async def test_reports_a_server_that_keeps_closing(self):
@@ -179,6 +179,19 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         self.now = datetime.datetime(2026, 12, 1, 12, 0, tzinfo=datetime.timezone.utc).timestamp()
         await hours.check()
         self.assertEqual(control.ran, ['start'])
+
+    async def test_valheim_follows_the_same_schedule(self):
+        control = FakeControl(running=True)
+        control.game, control.name = VALHEIM, 'CompaValheim'
+        hours = self.make(control, at(2026, 10, 5, 20, 0))
+        await hours.check()
+        self.assertEqual(control.ran, ['stop'])
+        self.assertEqual(self.posts, ['**CompaValheim** was shut down at 8:00 PM because nobody was online. '
+                                      'It starts again at 6:00 AM.'])
+        self.now = at(2026, 10, 6, 6, 0)
+        await hours.check()
+        self.assertEqual(control.ran, ['stop', 'start'])
+        self.assertEqual(self.posts[1], '**CompaValheim** was started at 6:00 AM for the day and is ready for players.')
 
     async def test_off_turns_a_rule_off(self):
         control = FakeControl(running=True)

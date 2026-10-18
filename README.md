@@ -75,8 +75,9 @@ are elsewhere) and reads `ServerName` and `GamePort` from their `config.psd1`. `
 `stop`, `restart`, `backup` and `update` work as described below for Icarus, except that the server
 counts as ready once `logs\valheim_server.log` says `Game server connected`, players are counted on
 the Steam query port 2457 (or from who the log says has connected), and `update` has no mods to
-refresh. Down and crash alerts and automatic updates (below) look after Valheim too. The scheduled
-start and stop and automatic backups still only look after Icarus.
+refresh. Down and crash alerts and automatic updates (below) look after Valheim too, and so can the
+scheduled start and stop (turned off for Valheim until you set `VALHEIM_ACTIVE_HOURS=on`). Automatic
+backups still only look after Icarus.
 
 | Command | Behavior |
 | --- | --- |
@@ -211,7 +212,7 @@ performance are skipped. Follow the post link for the full notes.
 
 ### Active hours
 
-Compabot keeps the server to the hours you play, in US Central time:
+Compabot keeps each game server to the hours you play, in US Central time:
 
 - At 8:00 PM, if nobody is on, it stops the server (with the usual final backup). If someone
   is on, the server is left running for the night.
@@ -233,6 +234,14 @@ Set `SERVER_START_TIME` and `SERVER_STOP_TIME` in `.env` to other 24-hour times 
 or to `off` to turn either one off. `SERVER_TIMEZONE` defaults to `America/Chicago`, which follows
 daylight saving time. Run `pip install -r requirements.txt` again after updating, since Windows
 needs the `tzdata` package for time zones. Without it Compabot runs with the schedule off and says so in `logs\compabot.log`.
+
+Every game shares these times, and each game can be taken off the schedule on its own:
+`ICARUS_ACTIVE_HOURS` and `VALHEIM_ACTIVE_HOURS` in `.env` take `on` or `off`. Left blank, Icarus
+is on and Valheim is off, so Valheim is only started and stopped by hand until you set
+`VALHEIM_ACTIVE_HOURS=on` and restart Compabot. A game is also skipped if its scripts folder is
+not on the PC. Each game is checked separately, so with both on, both are started at 6:00 AM and
+each is stopped at 8:00 PM only if nobody is on that game. Each post names its game, for example
+`**CompaWorld** (Icarus) was shut down at 8:00 PM because nobody was online.`
 
 ## Start automatically after restarts
 
