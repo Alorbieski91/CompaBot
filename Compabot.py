@@ -10,6 +10,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from bot.features import install_features
+from bot.games import ICARUS
 from bot.icarus.active_hours import ActiveHours, parse_time
 from bot.icarus.auto_update import AutoUpdater
 from bot.icarus.monitor import install_monitor
@@ -32,7 +33,9 @@ class CompaBot(commands.Bot):
         self.guild_id = guild_id
         self.greetings = {}
         self.store = None
-        self.server = ServerControl(server_admins, scripts_dir)
+        # One ServerControl per game, by profile key. Background jobs still only watch Icarus.
+        self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
+        self.servers = {ICARUS.key: self.server}
         self.update_channel_id = update_channel_id
         self.updater = AutoUpdater(self.server, self.announce, update_hours,
                                    state_file=BASE / 'data' / 'auto_update.json') if update_hours > 0 else None
@@ -46,7 +49,7 @@ class CompaBot(commands.Bot):
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
         install_features(self)
-        install_server_commands(self, self.server)
+        install_server_commands(self, self.servers)
         if self.server.windows:
             self.auto_backup.start()
             if self.alert_channel_id:

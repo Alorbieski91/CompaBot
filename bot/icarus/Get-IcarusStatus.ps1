@@ -1,7 +1,9 @@
-# Prints one line of JSON describing the Icarus server, for Compabot's /server status.
+# Prints one line of JSON describing a game server, for Compabot's /server status.
+# ICARUS_ROOT is the install folder; GAME_PROCESS is the server process name as a LIKE pattern.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$p = Get-CimInstance Win32_Process -Filter "Name LIKE 'IcarusServer%'" |
+$name = if ($env:GAME_PROCESS) { $env:GAME_PROCESS } else { 'IcarusServer%' }
+$p = Get-CimInstance Win32_Process -Filter "Name LIKE '$name'" |
     Where-Object ExecutablePath -like "$($env:ICARUS_ROOT)*" | Sort-Object CreationDate | Select-Object -First 1
 if (-not $p) { '{"running":false}'; exit 0 }
 [pscustomobject]@{ running = $true

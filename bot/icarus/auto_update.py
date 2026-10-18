@@ -21,12 +21,13 @@ import subprocess
 import time
 from pathlib import Path
 
+from ..games import ICARUS
 from . import patch_notes
 from .server_control import ServerError, mod_report, report
 
 log = logging.getLogger('compabot.autoupdate')
 
-APP_ID = '2089300'
+APP_ID = ICARUS.steam_app_id
 FIRST_CHECK = 60
 WHILE_PLAYING = 15 * 60
 STEAMCMD_TIMEOUT = 5 * 60
@@ -35,9 +36,9 @@ SCRIPT_WINDOW = 2 * 60 * 60
 MANIFEST_BUILD = re.compile(r'"buildid"\s+"(\d+)"')
 
 
-def installed_build(install_root):
+def installed_build(install_root, app_id=APP_ID):
     """The Steam build ID of the installed server, or None if the manifest can't be read."""
-    path = Path(install_root) / 'server' / 'steamapps' / f'appmanifest_{APP_ID}.acf'
+    path = Path(install_root) / 'server' / 'steamapps' / f'appmanifest_{app_id}.acf'
     try:
         match = MANIFEST_BUILD.search(path.read_text(encoding='utf-8', errors='replace'))
     except OSError:
@@ -53,12 +54,12 @@ def public_build(app_info):
     return int(match[1]) if match else None
 
 
-async def query_steam(steamcmd):
+async def query_steam(steamcmd, app_id=APP_ID):
     """Ask SteamCMD for the server's app info. Returns its output."""
     # A stale cached appinfo.vdf can make SteamCMD report an old build, so refresh it.
     (Path(steamcmd).parent / 'appcache' / 'appinfo.vdf').unlink(missing_ok=True)
     proc = await asyncio.create_subprocess_exec(
-        str(steamcmd), '+login', 'anonymous', '+app_info_update', '1', '+app_info_print', APP_ID, '+quit',
+        str(steamcmd), '+login', 'anonymous', '+app_info_update', '1', '+app_info_print', app_id, '+quit',
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), STEAMCMD_TIMEOUT)
@@ -123,6 +124,8 @@ class AutoUpdater:
 
     async def mod_updates(self):
         """Mods with a newer release the installed game can run, or [] if laanp's list can't be read."""
+        if not self.control.mods:
+            return []
         try:
             return await asyncio.to_thread(self.control.mods.available)
         except Exception as error:
@@ -134,9 +137,10 @@ class AutoUpdater:
         control = self.control
         if control.busy:
             return WHILE_PLAYING
-        installed = installed_build(control.install_root)
+        app_id = control.game.steam_app_id
+        installed = installed_build(control.install_root, app_id)
         try:
-            latest = public_build(await self.query(control.install_root / 'steamcmd' / 'steamcmd.exe'))
+            latest = public_build(await self.query(control.install_root / 'steamcmd' / 'steamcmd.exe', app_id))
         except (OSError, asyncio.TimeoutError) as error:
             log.warning('Could not ask SteamCMD for the latest build: %r', error)
             latest = None
@@ -195,5 +199,5 @@ class AutoUpdater:
         verb = 'Installed' if code == 0 else 'Tried to install'
         await self.notify(f'{verb} Icarus build {latest} automatically (was {installed}).\n{text}')
         if code == 0:
-            await self.share_notes(installed_build(control.install_root))
+            await self.share_notes(installed_build(control.install_root, app_id))
         return self.every
