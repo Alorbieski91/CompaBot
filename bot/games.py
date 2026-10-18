@@ -25,6 +25,7 @@ class GameProfile:
     query_port: int  # Steam query (A2S) port used to count players
     max_players: int
     steam_app_id: str  # the dedicated server's Steam app
+    news_app_id: str  # the game's own Steam app, whose news feed has the patch notes
     backup_glob: str  # backup zips in <install root>\backups
     log_file: str  # server log, relative to the install root
     saves_dir: str  # world saves, relative to the install root
@@ -50,6 +51,7 @@ ICARUS = GameProfile(
     query_port=27015,
     max_players=2,
     steam_app_id='2089300',
+    news_app_id='1149460',  # the dedicated server's app has no news feed
     backup_glob='Icarus-*.zip',
     log_file=r'data\Saved\Logs\Icarus.log',
     saves_dir=r'data\Saved\PlayerData',
@@ -75,6 +77,7 @@ VALHEIM = GameProfile(
     query_port=2457,
     max_players=10,
     steam_app_id='896660',
+    news_app_id='892970',
     backup_glob='Valheim-*.zip',
     log_file=r'logs\valheim_server.log',
     saves_dir=r'data\worlds_local',

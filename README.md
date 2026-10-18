@@ -75,8 +75,8 @@ are elsewhere) and reads `ServerName` and `GamePort` from their `config.psd1`. `
 `stop`, `restart`, `backup` and `update` work as described below for Icarus, except that the server
 counts as ready once `logs\valheim_server.log` says `Game server connected`, players are counted on
 the Steam query port 2457 (or from who the log says has connected), and `update` has no mods to
-refresh. Down and crash alerts (below) watch Valheim too. The scheduled start and stop, automatic
-updates and automatic backups still only look after Icarus.
+refresh. Down and crash alerts and automatic updates (below) look after Valheim too. The scheduled
+start and stop and automatic backups still only look after Icarus.
 
 | Command | Behavior |
 | --- | --- |
@@ -182,6 +182,12 @@ week waits for that game update, which brings it in with one restart. If a mod u
 Compabot starts the server again and does not retry that same release on its own; run
 `/server mods` to try again. Remember that your own game client needs the new mod file too.
 
+Valheim gets the same check, on the same schedule, once its scripts folder exists on the PC. It
+asks its own SteamCMD (`C:\ValheimServer\steamcmd`) about Steam app 896660, compares the answer with
+`server\steamapps\appmanifest_896660.acf`, counts players the way `/server status game:Valheim`
+does, and runs `Update-ValheimServer.ps1`. Valheim has no mods to update. Each game's messages
+name the game, for example "A Valheim update is out".
+
 Set `AUTO_UPDATE_CHANNEL_ID` in `.env` to a channel ID (Developer Mode > right-click the
 channel > Copy Channel ID) to have Compabot post there when an update is waiting and when it
 has installed one. Without it, these messages only go to the log. Set `AUTO_UPDATE_HOURS`
@@ -191,11 +197,12 @@ automatic game and mod updates off.
 #### What changed in the game
 
 When the server's build changes (by the automatic update or by hand), Compabot also posts the
-gameplay changes from the new "Week N Update" and hotfix posts on Steam: new or changed creature
-behaviour (like Kiwis laying eggs), taming and farming, new items and recipes, balance changes,
-missions, and anything that touches saves. Bug fixes and polish are left out. It waits until
-Steam has the notes, and remembers the last build it posted about in `data/auto_update.json`, so
-the first run after setup only records the current build.
+gameplay changes from the new "Week N Update" and hotfix posts on Steam (for Valheim, its "Patch"
+posts): new or changed creature behaviour (like Kiwis laying eggs), taming and farming, new items
+and recipes, balance changes, missions, and anything that touches saves. Bug fixes and polish are
+left out. It waits until Steam has the notes, and remembers the last build it posted about in
+`data/auto_update.json` (`data/auto_update_valheim.json` for Valheim), so the first run after
+setup only records the current build.
 
 The list comes straight from the notes: list items that mention creatures, taming, farming,
 items, recipes, resources, survival stats, missions and the like come first, then other

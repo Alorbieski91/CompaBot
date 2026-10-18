@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from bot.games import VALHEIM
 from bot.icarus.auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
 from bot.icarus import patch_notes
 from bot.icarus.server_control import SCRIPTS, ServerControl
@@ -318,6 +319,90 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         runner = self.use(running=False)
         self.assertEqual(await self.updater.check(), 2 * 60 * 60)
         self.assertEqual((runner.ran, self.messages), ([], []))
+
+
+VALHEIM_INFO = APP_INFO.replace('2089300', '896660')
+VALHEIM_JOIN = ('10/18/2026 12:28:09: Got connection SteamID 76561198039777309\n'
+                '10/18/2026 12:28:30: Got character ZDOID from Shelob : 760666702:1\n')
+VALHEIM_LEAVE = '10/18/2026 13:02:00: Closing socket 76561198039777309\n'
+VALHEIM_NEWS = {'appnews': {'newsitems': [
+    {'title': 'Patch 0.221.4', 'date': 1_790_500_000, 'url': 'https://store.steampowered.com/news/221',
+     'contents': '[list][*]Added a new boar taming tweak[*]Fixed a crash when sailing[/list]'}]}}
+
+
+class ValheimAutoUpdateTests(unittest.IsolatedAsyncioTestCase):
+    """The same updater looking after Valheim: its own app, SteamCMD and scripts, and no mods."""
+
+    async def asyncSetUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.root = Path(self.folder.name)
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        for name in VALHEIM.scripts.values():
+            (scripts / name).write_text('')
+        (scripts / 'config.psd1').write_text(f"@{{\n    InstallRoot = '{self.root}'\n    ServerName = 'CompaValheim'\n}}\n")
+        apps = self.root / 'server' / 'steamapps'
+        apps.mkdir(parents=True)
+        (apps / 'appmanifest_896660.acf').write_text('"buildid"\t\t"20300000"\n')
+        self.control = ServerControl([], scripts, game=VALHEIM)
+        self.control.query = lambda port: None
+        self.messages = []
+        self.queries = []
+
+        async def notify(text):
+            self.messages.append(text)
+
+        async def query(steamcmd, app_id):
+            self.queries.append((steamcmd, app_id))
+            return VALHEIM_INFO
+
+        async def news():
+            return VALHEIM_NEWS
+        self.state = self.root / 'state.json'
+        self.updater = AutoUpdater(self.control, notify, every_hours=2, query=query, state_file=self.state, news=news)
+
+    async def asyncTearDown(self):
+        self.folder.cleanup()
+
+    def write_log(self, text):
+        logs = self.root / 'logs'
+        logs.mkdir(exist_ok=True)
+        (logs / 'valheim_server.log').write_text(text)
+        os.utime(logs / 'valheim_server.log', (2_000, 2_000))
+
+    def use(self, running):
+        self.control.run = Runner(running)
+        return self.control.run
+
+    async def test_waits_for_players_then_updates_and_restarts(self):
+        self.write_log(VALHEIM_JOIN)
+        runner = self.use(running=True)
+        self.assertEqual(await self.updater.check(), WHILE_PLAYING)
+        self.assertEqual(self.queries, [(self.root / 'steamcmd' / 'steamcmd.exe', '896660')])
+        self.assertEqual(self.messages, ['A Valheim update is out (build 20300000 to 20400000). '
+                                         'I will install it once Shelob has left the server.'])
+        self.write_log(VALHEIM_JOIN + VALHEIM_LEAVE)
+        self.assertEqual(await self.updater.check(), 2 * 60 * 60)
+        self.assertEqual(runner.ran, ['Stop-ValheimServer.ps1', 'Update-ValheimServer.ps1', 'Start-ValheimServer.ps1'])
+        self.assertIn('Installed Valheim build 20400000 automatically (was 20300000).', self.messages[1])
+        self.assertNotIn('Mods', self.messages[1])
+
+    async def test_updates_a_stopped_server_and_leaves_it_stopped(self):
+        runner = self.use(running=False)
+        await self.updater.check()
+        self.assertEqual(runner.ran, ['Update-ValheimServer.ps1'])
+
+    async def test_posts_valheim_patch_notes(self):
+        self.state.write_text(json.dumps({'build': 20300000, 'since': 1_790_000_000}))
+        (self.root / 'server' / 'steamapps' / 'appmanifest_896660.acf').write_text('"buildid"\t\t"20400000"\n')
+        self.use(running=False)
+        await self.updater.check()
+        self.assertEqual(self.messages, [
+            '**What changed in Valheim** (server now on build 20400000): '
+            '[Patch 0.221.4](<https://store.steampowered.com/news/221>)\n- Added a new boar taming tweak'])
+
+    def test_reads_the_valheim_news_feed(self):
+        self.assertIn('appid=892970&', patch_notes.news_url(VALHEIM.news_app_id))
 
 
 class PatchNotesTests(unittest.IsolatedAsyncioTestCase):
