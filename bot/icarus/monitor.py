@@ -1,4 +1,4 @@
-"""Watch the Icarus server and post to Discord when it goes down, crashes, or comes back."""
+"""Watch a game server and post to Discord when it goes down, crashes, or comes back."""
 import asyncio
 import io
 import logging
@@ -24,6 +24,8 @@ ATTACHMENT_LIMIT = 9 * 1024 * 1024
 
 def latest_crash(crashes_dir, after):
     """The newest crash report folder written after `after` (Unix time), or None."""
+    if crashes_dir is None:  # the game writes no crash reports
+        return None
     try:
         folders = [p for p in Path(crashes_dir).iterdir() if p.is_dir() and p.stat().st_mtime > after]
     except OSError:
@@ -116,8 +118,14 @@ class ServerMonitor:
         previous, self.state, self.pending, self.seen = self.state, state, None, 0
         return self.announce(previous, state)
 
+    def label(self):
+        """The server's name in bold, with its game added when the name does not already say it."""
+        name, game = self.control.name, self.control.game.name
+        return f'**{name}**' if game.lower() in name.lower() else f'**{name}** ({game})'
+
     def announce(self, previous, state):
-        name = f'**{self.control.name}**'
+        name = self.label()
+        start, stop = self.control.slash('start'), self.control.slash('stop')
         now = self.clock()
         if state == 'up':
             text = f'{name} is back online and ready for players{self.players()}.'
@@ -126,7 +134,7 @@ class ServerMonitor:
             return text, None
         if state == 'hung':
             return (f'{name} has stopped answering on query port {self.control.query_port}, but it is still running. '
-                    'It may be frozen. If it stays this way, use `/server stop`; if that fails, close it on the PC.'), None
+                    f'It may be frozen. If it stays this way, use {stop}; if that fails, close it on the PC.'), None
         # Down.
         started, self.started = self.started, None
         if now - self.control.stopped_at < INTENTIONAL_GRACE:
@@ -137,10 +145,12 @@ class ServerMonitor:
             text = f'{name} crashed <t:{int(crash.stat().st_mtime)}:R>.'
             if summary:
                 text += f'\n```\n{summary[:800]}\n```'
-            text += '\nUse `/server start` to bring it back.'
+            text += f'\nUse {start} to bring it back.'
+        elif self.control.crashes_dir is None:
+            text = f'{name} went down. It may have crashed or been closed on the PC. Use {start} to bring it back.'
         else:
             text = (f'{name} went down. No crash report was written, so it may have been '
-                    'closed on the PC. Use `/server start` to bring it back.')
+                    f'closed on the PC. Use {start} to bring it back.')
         return text, crash
 
     def players(self):
@@ -150,9 +160,11 @@ class ServerMonitor:
 
 
 def install_monitor(bot, control, channel_id, interval=POLL_SECONDS):
-    """Start polling once the bot is connected. Returns the running task."""
+    """Start polling one game server once the bot is connected. Returns the running task."""
     monitor = ServerMonitor(control)
-    bot.monitor = monitor
+    if not hasattr(bot, 'monitors'):
+        bot.monitors = {}
+    bot.monitors[control.game.key] = monitor
 
     async def loop():
         await bot.wait_until_ready()
@@ -161,7 +173,7 @@ def install_monitor(bot, control, channel_id, interval=POLL_SECONDS):
             try:
                 channel = await bot.fetch_channel(channel_id)
             except discord.HTTPException:
-                log.error('Server alerts are off: cannot open channel %s', channel_id)
+                log.error('%s server alerts are off: cannot open channel %s', control.game.name, channel_id)
                 return
         log.info('Watching %s for server alerts in #%s', control.name, channel)
         while not bot.is_closed():
@@ -170,10 +182,10 @@ def install_monitor(bot, control, channel_id, interval=POLL_SECONDS):
                 if result:
                     await post(channel, *result)
             except Exception:
-                log.exception('Server monitor check failed')
+                log.exception('%s server monitor check failed', control.game.name)
             await asyncio.sleep(interval)
 
-    return asyncio.create_task(loop(), name='server-monitor')
+    return asyncio.create_task(loop(), name=f'server-monitor-{control.game.key}')
 
 
 async def post(channel, text, crash):
