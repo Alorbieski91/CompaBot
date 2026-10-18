@@ -1,12 +1,13 @@
-"""Install Icarus game and mod updates on a schedule, so the server is current before anyone plays.
+"""Install game and mod updates on a schedule, so each server is current before anyone plays.
 
-Every few hours Compabot asks SteamCMD for the latest public build of the Icarus dedicated
-server (Steam app 2089300) and compares it with the build in the installed appmanifest.
+Every few hours Compabot asks SteamCMD for the latest public build of a game's dedicated
+server (Icarus is Steam app 2089300, Valheim 896660) and compares it with the build in the
+installed appmanifest. Each game has its own AutoUpdater, SteamCMD and update script.
 When Steam has a newer one, it waits until nobody is connected, stops the server (which
 backs up), runs the update script (which backs up again), updates the mods, and starts the
 server again if it was running. Who is connected is read from the server log.
 
-Without a game update, it also checks laanp's mod list for a newer release of an installed mod
+Without a game update, it also checks laanp's mod list (Icarus only) for a newer release of an installed mod
 that the installed game can run, and installs it the same way: wait until nobody is on, stop,
 swap the mod, start again.
 
@@ -80,7 +81,8 @@ class AutoUpdater:
         self.failed_mods = None
         # Remembers which build the last patch-notes post covered, across restarts.
         self.state_file = Path(state_file) if state_file else None
-        self.news = news or (lambda: asyncio.to_thread(patch_notes.fetch_json, patch_notes.NEWS_URL))
+        url = patch_notes.news_url(control.game.news_app_id)
+        self.news = news or (lambda: asyncio.to_thread(patch_notes.fetch_json, url))
 
     def load_state(self):
         try:
@@ -104,12 +106,12 @@ class AutoUpdater:
         try:
             posts = patch_notes.update_posts(await self.news(), state.get('since', 0))
         except Exception as error:
-            log.warning('Could not read the Icarus patch notes from Steam: %r', error)
+            log.warning('Could not read the %s patch notes from Steam: %r', self.control.game.name, error)
             return
         if not posts:
             log.info('Build %s has no new patch notes on Steam yet', build)
             return  # Steam often posts the notes a little after the build; try again next check
-        await self.notify(patch_notes.describe(posts, build))
+        await self.notify(patch_notes.describe(posts, build, self.control.game.name))
         self.save_state(build, posts[-1]['date'])
 
     async def run(self):
@@ -118,7 +120,7 @@ class AutoUpdater:
             try:
                 delay = await self.check()
             except Exception:
-                log.exception('Update check failed')
+                log.exception('%s update check failed', self.control.game.name)
                 delay = self.every
             await asyncio.sleep(delay)
 
@@ -142,13 +144,13 @@ class AutoUpdater:
         try:
             latest = public_build(await self.query(control.install_root / 'steamcmd' / 'steamcmd.exe', app_id))
         except (OSError, asyncio.TimeoutError) as error:
-            log.warning('Could not ask SteamCMD for the latest build: %r', error)
+            log.warning('Could not ask SteamCMD for the latest %s build: %r', control.game.name, error)
             latest = None
         game = bool(installed and latest and latest > installed)
         if not installed or not latest:
-            log.warning('Could not compare builds (installed %s, Steam %s)', installed, latest)
+            log.warning('Could not compare %s builds (installed %s, Steam %s)', control.game.name, installed, latest)
         elif not game:
-            log.info('Icarus server is up to date (build %s)', installed)
+            log.info('%s server is up to date (build %s)', control.game.name, installed)
             await self.share_notes(installed)
         # A game update brings the mods along with it, so only look for mod releases without one.
         mods = [] if game else await self.mod_updates()
@@ -158,7 +160,8 @@ class AutoUpdater:
         if not game and not mods:
             return self.every
         if game:
-            key, what = latest, f'An Icarus update is out (build {installed} to {latest})'
+            article = 'An' if control.game.name[0] in 'AEIOU' else 'A'
+            key, what = latest, f'{article} {control.game.name} update is out (build {installed} to {latest})'
         else:
             key, what = mods, f'A mod update is out ({"; ".join(mods)})'
         try:
@@ -188,7 +191,7 @@ class AutoUpdater:
                 # Start again even after a failed update, so nobody is locked out until someone notices.
                 text += '\n' + report('Start', *await control.run_action('start', window=SCRIPT_WINDOW))
         except ServerError as error:
-            log.warning('Automatic update stopped: %s', error)
+            log.warning('Automatic %s update stopped: %s', control.game.name, error)
             return WHILE_PLAYING
         self.announced = None
         if not game:
@@ -197,7 +200,7 @@ class AutoUpdater:
             await self.notify(f'{verb} automatically.\n{text}{again}')
             return self.every
         verb = 'Installed' if code == 0 else 'Tried to install'
-        await self.notify(f'{verb} Icarus build {latest} automatically (was {installed}).\n{text}')
+        await self.notify(f'{verb} {control.game.name} build {latest} automatically (was {installed}).\n{text}')
         if code == 0:
             await self.share_notes(installed_build(control.install_root, app_id))
         return self.every

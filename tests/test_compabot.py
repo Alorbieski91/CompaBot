@@ -99,6 +99,19 @@ class AlertTests(unittest.TestCase):
                 bot.install_alerts()
             install.assert_not_called()
 
+    def test_each_installed_game_is_kept_up_to_date(self):
+        with tempfile.TemporaryDirectory() as folder:
+            icarus, valheim = Path(folder) / 'icarus', Path(folder) / 'valheim'
+            icarus.mkdir()
+            bot = create_bot(scripts_dir=icarus, update_hours=2, valheim_scripts_dir=valheim)
+            self.assertEqual([u.control.game.key for u in bot.install_updates()], ['icarus'])
+            valheim.mkdir()
+            updaters = bot.install_updates()
+            self.assertEqual([u.control.game.key for u in updaters], ['icarus', 'valheim'])
+            self.assertEqual([u.state_file.name for u in updaters], ['auto_update.json', 'auto_update_valheim.json'])
+            self.assertEqual(updaters[1].every, 2 * 60 * 60)
+            self.assertEqual(create_bot(scripts_dir=icarus, update_hours=0, valheim_scripts_dir=valheim).install_updates(), [])
+
 
 if __name__ == '__main__':
     unittest.main()

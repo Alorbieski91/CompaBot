@@ -1,6 +1,7 @@
-"""Turn Icarus patch notes from Steam into a short "what changed for us" message.
+"""Turn a game's patch notes from Steam into a short "what changed for us" message.
 
-RocketWerkz posts each "Week N Update" and "Hotfix" on the game's Steam news feed. Compabot
+RocketWerkz posts each Icarus "Week N Update" and "Hotfix" on the game's Steam news feed, and
+Iron Gate posts each Valheim "Patch" the same way. Compabot
 picks out the list items that change how we play: creatures (Kiwis laying eggs is the kind of
 thing we missed once), taming, farming, new items and recipes, balance, missions, and anything
 that touches saves. Bug-fix and polish sections are skipped.
@@ -10,8 +11,14 @@ import re
 import urllib.request
 
 GAME_APP_ID = '1149460'  # the Icarus game; the dedicated server (2089300) has no news feed
-NEWS_URL = ('https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=' + GAME_APP_ID +
+
+
+def news_url(app_id):
+    return ('https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=' + app_id +
             '&count=15&maxlength=0&feeds=steam_community_announcements&format=json')
+
+
+NEWS_URL = news_url(GAME_APP_ID)
 UPDATE_TITLE = re.compile(r'\b(update|hotfix|patch)\b', re.I)
 BBCODE = re.compile(r'\[/?[a-z0-9*]+(?:=[^\]]*)?\]', re.I)
 # Sections of the notes that never change how we play.
@@ -70,9 +77,9 @@ def gameplay_changes(posts, limit=LIMIT):
     return lines
 
 
-def describe(posts, build):
+def describe(posts, build, game='Icarus'):
     """The Discord message about the gameplay changes in `posts`, now running as `build`."""
     titles = ', '.join(f"[{p['title']}](<{p['url']}>)" for p in posts)
     lines = gameplay_changes(posts)
     summary = '\n'.join(lines) if lines else 'No gameplay changes stood out; see the notes for details.'
-    return f'**What changed in Icarus** (server now on build {build}): {titles}\n{summary}'
+    return f'**What changed in {game}** (server now on build {build}): {titles}\n{summary}'

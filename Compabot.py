@@ -34,14 +34,15 @@ class CompaBot(commands.Bot):
         self.guild_id = guild_id
         self.greetings = {}
         self.store = None
-        # One ServerControl per game, by profile key. Alerts watch every game; the other background jobs still only Icarus.
+        # One ServerControl per game, by profile key. Alerts and auto-updates cover every game; the
+        # schedule and auto-backups still only Icarus.
         self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
         self.servers = {ICARUS.key: self.server,
                         VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM)}
         self.update_channel_id = update_channel_id
-        self.updater = AutoUpdater(self.server, self.announce, update_hours,
-                                   state_file=BASE / 'data' / 'auto_update.json') if update_hours > 0 else None
-        self.update_task = None
+        self.update_hours = update_hours
+        self.updaters = {}  # game key -> AutoUpdater, filled in by install_updates
+        self.update_tasks = []
         self.alert_channel_id = alert_channel_id
         # active_hours is (start time, stop time, zone); either time may be None to turn it off.
         start, stop, zone = active_hours or (None, None, None)
@@ -55,8 +56,9 @@ class CompaBot(commands.Bot):
         if self.server.windows:
             self.auto_backup.start()
             self.install_alerts()
-        if self.updater and self.server.windows and self.server.scripts_dir.is_dir():
-            self.update_task = asyncio.create_task(self.updater.run())
+        if self.server.windows:
+            for updater in self.install_updates():
+                self.update_tasks.append(asyncio.create_task(updater.run()))
         if self.schedule and self.server.windows and self.server.scripts_dir.is_dir():
             self.schedule_task = asyncio.create_task(self.schedule.run())
         if self.guild_id:
@@ -77,6 +79,18 @@ class CompaBot(commands.Bot):
             if control is self.server or control.scripts_dir.is_dir():
                 install_monitor(self, control, self.alert_channel_id)
 
+    def install_updates(self):
+        """An AutoUpdater for each game whose scripts are installed on this PC, unless AUTO_UPDATE_HOURS is 0."""
+        if self.update_hours <= 0:
+            return []
+        for key, control in self.servers.items():
+            if control.scripts_dir.is_dir():
+                # Icarus keeps the file name it had before there were other games.
+                name = 'auto_update.json' if control is self.server else f'auto_update_{key}.json'
+                self.updaters[key] = AutoUpdater(control, self.announce, self.update_hours,
+                                                 state_file=BASE / 'data' / name)
+        return list(self.updaters.values())
+
     @tasks.loop(minutes=5)
     async def auto_backup(self):
         """Back up the Icarus world while the server is off, if it changed since the last backup."""
@@ -96,7 +110,7 @@ class CompaBot(commands.Bot):
 
     async def close(self):
         self.auto_backup.cancel()
-        for task in (self.update_task, self.schedule_task):
+        for task in (*self.update_tasks, self.schedule_task):
             if task:
                 task.cancel()
         try:
