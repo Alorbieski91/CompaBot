@@ -4,7 +4,7 @@ import struct
 import unittest
 import zlib
 
-from bot.icarus.ore_deposits import ProspectError, find_deposits, grid_cell, listing, prospect_blob, read_deposits, summary
+from bot.games.icarus.ore_deposits import ProspectError, find_deposits, grid_cell, listing, prospect_blob, read_deposits, summary
 
 
 def deposit(ore, x, y, z=0.0):

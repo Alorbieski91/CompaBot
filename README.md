@@ -67,8 +67,8 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 
 Every `/server` command takes an optional `game:` option that picks which game server it acts on:
 Icarus or Valheim. Leaving it empty means Icarus. Each game's facts (folders, scripts, process
-name, ports, and which extras it has) are in one profile in `bot/games.py`. `mods`, `ores` and
-`start world:` are Icarus extras and are refused for Valheim.
+name, ports, and which extras it has) are in one profile in that game's folder under `bot/games/`.
+`mods`, `ores` and `start world:` are Icarus extras and are refused for Valheim.
 
 `game:Valheim` runs the scripts in `C:\ValheimServer\scripts` (set `VALHEIM_SCRIPTS_DIR` if they
 are elsewhere) and reads `ServerName` and `GamePort` from their `config.psd1`. `status`, `start`,
@@ -324,16 +324,28 @@ Install-CompaBotStartup.ps1  creates or removes the startup and watchdog tasks
 bot/
   features.py                quotes, favorites, /pick and /say
   storage.py                 SQLite storage for quotes and favorites
-  games.py                   one profile per game server (paths, scripts, ports, extras)
-  icarus/
-    server_control.py        /server commands and the game script runner
-    Get-IcarusStatus.ps1     tells server_control.py whether the server is running
+  servers/                   what every game server shares
+    profile.py               GameProfile: what a game folder tells the shared code
+    control.py               runs a game's scripts; status, start, stop, restart, backups
+    commands.py              the /server commands every game has
+    Get-ServerStatus.ps1     tells control.py whether a server is running
     monitor.py               down, crash and back-up alerts
     steam_query.py           player count from the Steam query port
-    auto_update.py           scheduled game updates
+    auto_update.py           scheduled game (and mod) updates
     patch_notes.py           gameplay changes from the Steam patch notes
-    mod_update.py            laanp mod updates
     active_hours.py          scheduled start and stop
+  games/                     one folder per game; __init__.py lists them
+    icarus/
+      __init__.py            the Icarus profile
+      players.py             who is on, from the server log
+      commands.py            /server ores and /server mods
+      worlds.py              saved prospects for /server start world:
+      mods.py                laanp mod updates
+      ore_deposits.py        deep ore deposits in a prospect save
+      ore_map.py             the ore map picture
+    valheim/
+      __init__.py            the Valheim profile
+      players.py             who is on, from the server log
 tests/                       unit tests (run with the command above)
 data/, logs/, .env           created locally and ignored by Git
 ```

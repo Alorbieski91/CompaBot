@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 $IcarusAppId = '1149460'
 $ModInfoUrl = 'https://raw.githubusercontent.com/laanp/Icarus_Mods_Separated/main/modinfo.json'
 $DefaultMod = 'laanp-PetesBeaconTeleport'
-# Same patterns as bot/icarus/mod_update.py.
+# Same patterns as bot/games/icarus/mods.py.
 $PakName = '^(?<name>.+)_v(?<fix>\d+)_w(?<week>\d+)_P\.pak$'
 $ReadmeRev = 'Rev\.\s*(?<rev>\d+(?:\.\d+){3})\s*\(Week:\s*(?<week>\d+)\)'
 $PakMagic = [byte[]](0xe1, 0x12, 0x6f, 0x5a)

@@ -3,9 +3,9 @@ import unittest
 from zoneinfo import ZoneInfo
 
 from bot.games import ICARUS, VALHEIM
-from bot.icarus.active_hours import ActiveHours, clock_time, parse_time
-from bot.icarus.server_control import ServerControl, ServerError
-from bot.icarus.steam_query import Info
+from bot.servers.active_hours import ActiveHours, clock_time, parse_time
+from bot.servers.control import ServerControl, ServerError
+from bot.servers.steam_query import Info
 
 CHICAGO = ZoneInfo('America/Chicago')
 
