@@ -60,7 +60,8 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         (self.scripts / 'config.psd1').write_text(
             f"@{{\n    InstallRoot = '{root}'\n    ServerName = 'CompaWorld'\n    GamePort = 17777\n}}\n")
         self.runner = FakeRunner()
-        self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts)
+        # A Valheim folder that doesn't exist, so the jobs never touch a real C:\\ValheimServer.
+        self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts, valheim_scripts_dir=root / 'no-valheim')
         self.bot.server.run = self.runner
         self.bot.server.windows = True
         self.bot.server.query = lambda port: None
@@ -546,6 +547,30 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.runner.result = (0, '{"running":false}')
         self.write_backup(age=2 * 60 * 60)
         self.write_save(age=60 * 60)  # e.g. the server crashed after the last backup
+        await self.bot.auto_backup()
+        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
+
+    async def test_auto_backup_covers_each_installed_game(self):
+        valheim_scripts = Path(self.folder.name) / 'valheim' / 'scripts'
+        valheim_scripts.mkdir(parents=True)
+        for name in VALHEIM.scripts.values():
+            (valheim_scripts / name).write_text('')
+        valheim = ServerControl([ADMIN], valheim_scripts, game=VALHEIM)
+        valheim.run = self.runner
+        self.bot.servers['valheim'] = valheim
+        self.runner.result = (0, '{"running":false}')
+        self.write_backup(age=2 * 60 * 60)
+        self.write_save(age=60 * 60)
+        worlds = valheim.install_root / 'data' / 'worlds_local' / 'MiddleEarf'
+        worlds.mkdir(parents=True)
+        (worlds / '_main.0.fwl2').write_text('')
+        await self.bot.auto_backup()
+        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1',
+                                              'Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-ValheimServer.ps1'])
+        # A Valheim failure does not stop the Icarus backup, and the reverse.
+        self.runner.calls.clear()
+        valheim.busy = 'update'
+        self.write_save(age=0)
         await self.bot.auto_backup()
         self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
 
