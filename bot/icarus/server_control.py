@@ -396,6 +396,12 @@ class ServerControl:
         return await self.run_action('backup')
 
 
+def label(control):
+    """The server's name in bold, with its game added when the name does not already say it."""
+    name, game = control.name, control.game.name
+    return f'**{name}**' if game.lower() in name.lower() else f'**{name}** ({game})'
+
+
 async def launch(control, window):
     """Start the server and wait until it accepts players, starting it once more if it closes while loading.
 

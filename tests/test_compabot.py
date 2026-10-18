@@ -1,8 +1,10 @@
+import datetime
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 from Compabot import create_bot
 from bot.features import install_features
@@ -111,6 +113,25 @@ class AlertTests(unittest.TestCase):
             self.assertEqual([u.state_file.name for u in updaters], ['auto_update.json', 'auto_update_valheim.json'])
             self.assertEqual(updaters[1].every, 2 * 60 * 60)
             self.assertEqual(create_bot(scripts_dir=icarus, update_hours=0, valheim_scripts_dir=valheim).install_updates(), [])
+
+    def test_active_hours_cover_the_games_turned_on(self):
+        hours = (datetime.time(6), datetime.time(20), ZoneInfo('UTC'))
+        with tempfile.TemporaryDirectory() as folder:
+            icarus, valheim = Path(folder) / 'icarus', Path(folder) / 'valheim'
+            icarus.mkdir()
+            valheim.mkdir()
+            # By default only Icarus runs on the schedule; Valheim is off until VALHEIM_ACTIVE_HOURS=on.
+            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim)
+            self.assertEqual([s.control.game.key for s in bot.install_schedules()], ['icarus'])
+            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim,
+                             scheduled_games={'icarus', 'valheim'})
+            schedules = bot.install_schedules()
+            self.assertEqual([s.control.game.key for s in schedules], ['icarus', 'valheim'])
+            self.assertTrue(all(s.events == {'stop': datetime.time(20), 'start': datetime.time(6)} for s in schedules))
+            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim, scheduled_games={'valheim'})
+            self.assertEqual([s.control.game.key for s in bot.install_schedules()], ['valheim'])
+            off = (None, None, ZoneInfo('UTC'))
+            self.assertEqual(create_bot(scripts_dir=icarus, active_hours=off, valheim_scripts_dir=valheim).install_schedules(), [])
 
 
 if __name__ == '__main__':

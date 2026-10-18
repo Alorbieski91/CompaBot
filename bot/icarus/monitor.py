@@ -9,7 +9,7 @@ from pathlib import Path
 
 import discord
 
-from .server_control import ServerError
+from .server_control import ServerError, label
 
 log = logging.getLogger('compabot.monitor')
 
@@ -118,13 +118,8 @@ class ServerMonitor:
         previous, self.state, self.pending, self.seen = self.state, state, None, 0
         return self.announce(previous, state)
 
-    def label(self):
-        """The server's name in bold, with its game added when the name does not already say it."""
-        name, game = self.control.name, self.control.game.name
-        return f'**{name}**' if game.lower() in name.lower() else f'**{name}** ({game})'
-
     def announce(self, previous, state):
-        name = self.label()
+        name = label(self.control)
         start, stop = self.control.slash('start'), self.control.slash('stop')
         now = self.clock()
         if state == 'up':

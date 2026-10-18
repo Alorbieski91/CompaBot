@@ -10,7 +10,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from bot.features import install_features
-from bot.games import ICARUS, VALHEIM
+from bot.games import GAMES, ICARUS, VALHEIM
 from bot.icarus.active_hours import ActiveHours, parse_time
 from bot.icarus.auto_update import AutoUpdater
 from bot.icarus.monitor import install_monitor
@@ -23,7 +23,7 @@ log = logging.getLogger('compabot')
 class CompaBot(commands.Bot):
     def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR,
                  update_hours=0, update_channel_id=None, alert_channel_id=None, active_hours=None,
-                 valheim_scripts_dir=None):
+                 valheim_scripts_dir=None, scheduled_games=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -34,8 +34,8 @@ class CompaBot(commands.Bot):
         self.guild_id = guild_id
         self.greetings = {}
         self.store = None
-        # One ServerControl per game, by profile key. Alerts and auto-updates cover every game; the
-        # schedule and auto-backups still only Icarus.
+        # One ServerControl per game, by profile key. Alerts, auto-updates and the schedule cover
+        # every game; auto-backups still only Icarus.
         self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
         self.servers = {ICARUS.key: self.server,
                         VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM)}
@@ -44,10 +44,14 @@ class CompaBot(commands.Bot):
         self.updaters = {}  # game key -> AutoUpdater, filled in by install_updates
         self.update_tasks = []
         self.alert_channel_id = alert_channel_id
-        # active_hours is (start time, stop time, zone); either time may be None to turn it off.
-        start, stop, zone = active_hours or (None, None, None)
-        self.schedule = ActiveHours(self.server, self.alert, start, stop, zone) if start or stop else None
-        self.schedule_task = None
+        # active_hours is (start time, stop time, zone), shared by every game; either time may be
+        # None to turn it off. scheduled_games is the game keys it runs for; None means each
+        # profile's own default (Icarus on, Valheim off).
+        self.active_hours = active_hours or (None, None, None)
+        self.scheduled_games = (set(scheduled_games) if scheduled_games is not None
+                                else {key for key, control in self.servers.items() if control.game.active_hours})
+        self.schedules = {}  # game key -> ActiveHours, filled in by install_schedules
+        self.schedule_tasks = []
 
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
@@ -59,8 +63,9 @@ class CompaBot(commands.Bot):
         if self.server.windows:
             for updater in self.install_updates():
                 self.update_tasks.append(asyncio.create_task(updater.run()))
-        if self.schedule and self.server.windows and self.server.scripts_dir.is_dir():
-            self.schedule_task = asyncio.create_task(self.schedule.run())
+        if self.server.windows:
+            for schedule in self.install_schedules():
+                self.schedule_tasks.append(asyncio.create_task(schedule.run()))
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -91,6 +96,16 @@ class CompaBot(commands.Bot):
                                                  state_file=BASE / 'data' / name)
         return list(self.updaters.values())
 
+    def install_schedules(self):
+        """An ActiveHours for each game with active hours turned on whose scripts are installed on this PC."""
+        start, stop, zone = self.active_hours
+        if not (start or stop):
+            return []
+        for key, control in self.servers.items():
+            if key in self.scheduled_games and control.scripts_dir.is_dir():
+                self.schedules[key] = ActiveHours(control, self.alert, start, stop, zone)
+        return list(self.schedules.values())
+
     @tasks.loop(minutes=5)
     async def auto_backup(self):
         """Back up the Icarus world while the server is off, if it changed since the last backup."""
@@ -110,7 +125,7 @@ class CompaBot(commands.Bot):
 
     async def close(self):
         self.auto_backup.cancel()
-        for task in (*self.update_tasks, self.schedule_task):
+        for task in (*self.update_tasks, *self.schedule_tasks):
             if task:
                 task.cancel()
         try:
@@ -179,9 +194,9 @@ class CompaBot(commands.Bot):
 
 
 def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None,
-               alert_channel_id=None, active_hours=None, valheim_scripts_dir=None):
+               alert_channel_id=None, active_hours=None, valheim_scripts_dir=None, scheduled_games=None):
     bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id, active_hours,
-                   valheim_scripts_dir)
+                   valheim_scripts_dir, scheduled_games)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -226,6 +241,15 @@ if __name__ == '__main__':
             times[key] = parse_time(os.getenv(key, '').strip() or default)
         except ValueError:
             raise SystemExit(f'{key} must be a 24-hour time like {default}, or off.') from None
+    scheduled_games = set()
+    for game in GAMES.values():
+        # ICARUS_ACTIVE_HOURS, VALHEIM_ACTIVE_HOURS: on or off; blank keeps the game's default.
+        key = f'{game.key.upper()}_ACTIVE_HOURS'
+        switch = os.getenv(key, '').strip().lower() or ('on' if game.active_hours else 'off')
+        if switch not in ('on', 'off'):
+            raise SystemExit(f'{key} must be on or off, or blank.')
+        if switch == 'on':
+            scheduled_games.add(game.key)
     zone_name = os.getenv('SERVER_TIMEZONE', '').strip() or 'America/Chicago'
     try:
         zone = ZoneInfo(zone_name)
@@ -237,4 +261,5 @@ if __name__ == '__main__':
     create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir,
                update_hours, int(raw_channel) if raw_channel else None,
                int(raw_alerts) if raw_alerts else None,
-               (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone), valheim_scripts_dir).run(token)
+               (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone), valheim_scripts_dir,
+               scheduled_games).run(token)
