@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 from bot.games.icarus.ore_deposits import find_deposits
-from bot.games.icarus.ore_map import CODES, LEGEND_WIDTH, MAP_SIZE, ORANGE, render, rgb, to_px
+from bot.games.icarus.ore_map import CODES, LEGEND_WIDTH, MAPS_DIR, MAP_SIZE, ORANGE, render, rgb, to_px
 from bot.games.icarus.ore_deposits import ORES
 from tests.test_ore_deposits import WORLD
 
@@ -23,6 +23,11 @@ class OreMapTests(unittest.TestCase):
 
     def image(self, raw):
         return Image.open(io.BytesIO(raw)).convert('RGB')
+
+    def test_artwork_folder_is_data_maps_next_to_compabot(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertTrue((root / 'Compabot.py').is_file())
+        self.assertEqual(MAPS_DIR, root / 'data' / 'maps')
 
     def test_every_ore_has_a_code(self):
         self.assertEqual(set(CODES), set(ORES))

@@ -11,7 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .ore_deposits import COLUMNS, GRID, MAP_EDGE, OIL, by_ore, ore_label, split_oil
 
-MAPS_DIR = Path(__file__).resolve().parents[2] / 'data' / 'maps'
+# The checkout root (where Compabot.py and data/ live), three folders up from bot/games/icarus.
+MAPS_DIR = Path(__file__).resolve().parents[3] / 'data' / 'maps'
 MAP_SIZE = 1600
 LEGEND_WIDTH = 380
 CELL_PX = MAP_SIZE / GRID
