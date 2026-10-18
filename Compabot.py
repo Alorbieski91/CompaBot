@@ -34,7 +34,7 @@ class CompaBot(commands.Bot):
         self.guild_id = guild_id
         self.greetings = {}
         self.store = None
-        # One ServerControl per game, by profile key. Background jobs still only watch Icarus.
+        # One ServerControl per game, by profile key. Alerts watch every game; the other background jobs still only Icarus.
         self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
         self.servers = {ICARUS.key: self.server,
                         VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM)}
@@ -54,8 +54,7 @@ class CompaBot(commands.Bot):
         install_server_commands(self, self.servers)
         if self.server.windows:
             self.auto_backup.start()
-            if self.alert_channel_id:
-                install_monitor(self, self.server, self.alert_channel_id)
+            self.install_alerts()
         if self.updater and self.server.windows and self.server.scripts_dir.is_dir():
             self.update_task = asyncio.create_task(self.updater.run())
         if self.schedule and self.server.windows and self.server.scripts_dir.is_dir():
@@ -66,6 +65,17 @@ class CompaBot(commands.Bot):
             await self.tree.sync(guild=guild)
         else:
             await self.tree.sync()
+
+    def install_alerts(self):
+        """Watch each game server for crashes and outages, if ALERT_CHANNEL_ID is set.
+
+        Icarus is always watched; another game only once its scripts are installed on this PC.
+        """
+        if not self.alert_channel_id:
+            return
+        for control in self.servers.values():
+            if control is self.server or control.scripts_dir.is_dir():
+                install_monitor(self, control, self.alert_channel_id)
 
     @tasks.loop(minutes=5)
     async def auto_backup(self):

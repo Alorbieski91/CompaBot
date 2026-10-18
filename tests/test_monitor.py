@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from bot.games import ICARUS, VALHEIM
 from bot.icarus.monitor import ServerMonitor, crash_archive, crash_summary, latest_crash, post
 from bot.icarus.server_control import ServerError
 from bot.icarus.steam_query import Info, parse_info, query_info
@@ -68,10 +69,11 @@ class SteamQueryTests(unittest.TestCase):
 
 
 class FakeControl:
-    def __init__(self, root):
-        self.name = 'CompaWorld'
+    def __init__(self, root, game=ICARUS, name='CompaWorld'):
+        self.game = game
+        self.name = name
         self.install_root = Path(root)
-        self.crashes_dir = self.install_root / 'data' / 'Saved' / 'Crashes'
+        self.crashes_dir = self.install_root / 'data' / 'Saved' / 'Crashes' if game.crashes_dir else None
         self.query_port = 27015
         self.stopped_at = float('-inf')
         self.info = None
@@ -89,6 +91,10 @@ class FakeControl:
 
     def listening(self, started):
         return self.ready
+
+    def slash(self, command):
+        game = '' if self.game is ICARUS else f' game:{self.game.key}'
+        return f'`/server {command}{game}`'
 
 
 class MonitorTests(unittest.IsolatedAsyncioTestCase):
@@ -144,7 +150,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.poll())
         text, crash = await self.poll()
         self.assertEqual(crash, folder)
-        self.assertIn(f'**CompaWorld** crashed <t:{self.now - 90}:R>.', text)
+        self.assertIn(f'**CompaWorld** (Icarus) crashed <t:{self.now - 90}:R>.', text)
         self.assertIn('EXCEPTION_ACCESS_VIOLATION', text)
         self.assertIn('FObjectReplicator::PostSendBunch()', text)
         self.assertNotIn('C:\\BA', text)
@@ -169,7 +175,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         self.control.running, self.control.info, self.control.ready = True, None, False
         self.assertIsNone(await self.poll(3))  # Still loading.
         self.up(players=0)
-        self.assertEqual(await self.poll(2), ('**CompaWorld** is back online and ready for players (0/2 players).', None))
+        self.assertEqual(await self.poll(2), ('**CompaWorld** (Icarus) is back online and ready for players (0/2 players).', None))
 
     async def test_hung_server(self):
         self.up()
@@ -178,7 +184,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         text, crash = await self.poll(2)
         self.assertIn('stopped answering on query port 27015', text)
         self.up()
-        self.assertEqual((await self.poll(2))[0], '**CompaWorld** is answering again (1/2 players).')
+        self.assertEqual((await self.poll(2))[0], '**CompaWorld** (Icarus) is answering again (1/2 players).')
 
     async def test_without_query_answers_the_log_decides(self):
         self.control.running = True
@@ -187,7 +193,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         self.down()
         self.assertIn('went down', (await self.poll(2))[0])
         self.control.running = True
-        self.assertEqual((await self.poll(2))[0], '**CompaWorld** is back online and ready for players (1/2 players).')
+        self.assertEqual((await self.poll(2))[0], '**CompaWorld** (Icarus) is back online and ready for players (1/2 players).')
 
     async def test_status_errors_are_skipped(self):
         self.up()
@@ -196,6 +202,55 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         self.control.status = AsyncMock(side_effect=ServerError('Access denied'))
         self.assertIsNone(await self.poll(3))
         self.assertEqual(self.monitor.state, 'up')
+
+
+class ValheimMonitorTests(unittest.IsolatedAsyncioTestCase):
+    """The same monitor watching a Valheim server, which writes no crash reports."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.control = FakeControl(self.folder.name, game=VALHEIM, name='CompaValheim')
+        self.now = 10_000
+        self.monitor = ServerMonitor(self.control, clock=lambda: self.now)
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    poll, up, down = MonitorTests.poll, MonitorTests.up, MonitorTests.down
+
+    async def test_down_names_the_game(self):
+        self.up()
+        await self.poll()
+        self.down()
+        text, crash = await self.poll(2)
+        self.assertIsNone(crash)
+        self.assertEqual(text, '**CompaValheim** went down. It may have crashed or been closed on the PC. '
+                               'Use `/server start game:valheim` to bring it back.')
+        self.up(players=0)
+        self.assertEqual(await self.poll(2), ('**CompaValheim** is back online and ready for players (0/2 players).', None))
+
+    async def test_stop_is_not_announced(self):
+        self.up()
+        await self.poll()
+        self.control.stopped_at = self.now
+        self.down()
+        self.assertIsNone(await self.poll(3))
+        self.assertEqual(self.monitor.state, 'down')
+
+    async def test_hung_server_suggests_the_valheim_stop(self):
+        self.up()
+        await self.poll()
+        self.control.info = None
+        text, crash = await self.poll(2)
+        self.assertIn('**CompaValheim** has stopped answering on query port 27015', text)
+        self.assertIn('use `/server stop game:valheim`', text)
+
+    async def test_server_name_without_the_game_gets_it_added(self):
+        self.control.name = 'Vikings'
+        self.up()
+        await self.poll()
+        self.down()
+        self.assertTrue((await self.poll(2))[0].startswith('**Vikings** (Valheim) went down.'))
 
 
 class CrashFileTests(unittest.IsolatedAsyncioTestCase):
@@ -216,6 +271,7 @@ class CrashFileTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(latest_crash(self.folder.name, 0), self.crash)
         self.assertIsNone(latest_crash(self.folder.name, self.crash.stat().st_mtime + 1))
         self.assertIsNone(latest_crash(Path(self.folder.name) / 'missing', 0))
+        self.assertIsNone(latest_crash(None, 0))
 
     def test_summary_and_archive(self):
         self.assertEqual(crash_summary(self.crash),

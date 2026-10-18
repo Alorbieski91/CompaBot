@@ -75,8 +75,8 @@ are elsewhere) and reads `ServerName` and `GamePort` from their `config.psd1`. `
 `stop`, `restart`, `backup` and `update` work as described below for Icarus, except that the server
 counts as ready once `logs\valheim_server.log` says `Game server connected`, players are counted on
 the Steam query port 2457 (or from who the log says has connected), and `update` has no mods to
-refresh. The scheduled start and stop, automatic updates, crash alerts and automatic backups still
-only look after Icarus.
+refresh. Down and crash alerts (below) watch Valheim too. The scheduled start and stop, automatic
+updates and automatic backups still only look after Icarus.
 
 | Command | Behavior |
 | --- | --- |
@@ -114,6 +114,11 @@ gets no answer. It posts in that channel when:
 - the server closes without a crash report, for example when it is closed on the PC;
 - the server is still running but has stopped answering, which usually means it is frozen;
 - the server is back and ready for players, with the player count.
+
+Valheim is watched the same way, on its query port 2457, once its scripts folder exists on the PC.
+Valheim writes no crash reports, so a Valheim crash is posted as the server going down. Each alert
+names the server and, when the name does not already say it, the game, for example
+`**CompaWorld** (Icarus) went down` or `**CompaValheim** is back online`.
 
 A change has to be seen on two checks in a row before it is posted, so alerts arrive one to two
 minutes after the fact. `/server stop` is not announced as an outage, and nothing is posted

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from Compabot import create_bot
 from bot.features import install_features
@@ -79,6 +79,25 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.bot.process_commands = AsyncMock()
         await self.bot.on_message(SimpleNamespace(author=SimpleNamespace(bot=True)))
         self.bot.process_commands.assert_not_awaited()
+
+
+class AlertTests(unittest.TestCase):
+    def test_each_installed_game_is_watched(self):
+        with tempfile.TemporaryDirectory() as folder:
+            icarus, valheim = Path(folder) / 'icarus', Path(folder) / 'valheim'
+            icarus.mkdir()
+            for valheim_installed, watched in ((False, ['icarus']), (True, ['icarus', 'valheim'])):
+                if valheim_installed:
+                    valheim.mkdir()
+                bot = create_bot(scripts_dir=icarus, alert_channel_id=5, valheim_scripts_dir=valheim)
+                with patch('Compabot.install_monitor') as install:
+                    bot.install_alerts()
+                self.assertEqual([call.args[1].game.key for call in install.call_args_list], watched)
+                self.assertTrue(all(call.args[2] == 5 for call in install.call_args_list))
+            bot = create_bot(scripts_dir=icarus, valheim_scripts_dir=valheim)
+            with patch('Compabot.install_monitor') as install:
+                bot.install_alerts()
+            install.assert_not_called()
 
 
 if __name__ == '__main__':
