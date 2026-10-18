@@ -34,8 +34,8 @@ class CompaBot(commands.Bot):
         self.guild_id = guild_id
         self.greetings = {}
         self.store = None
-        # One ServerControl per game, by profile key. Alerts, auto-updates and the schedule cover
-        # every game; auto-backups still only Icarus.
+        # One ServerControl per game, by profile key. The background jobs (alerts, auto-updates,
+        # the schedule and auto-backups) cover every game installed on this PC.
         self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
         self.servers = {ICARUS.key: self.server,
                         VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM)}
@@ -108,20 +108,29 @@ class CompaBot(commands.Bot):
 
     @tasks.loop(minutes=5)
     async def auto_backup(self):
-        """Back up the Icarus world while the server is off, if it changed since the last backup."""
+        """Back up each game's world while its server is off, if it changed since its last backup.
+
+        Icarus is always checked; another game only once its scripts are installed on this PC.
+        """
+        for control in self.servers.values():
+            if control is self.server or control.scripts_dir.is_dir():
+                await self.auto_backup_game(control)
+
+    async def auto_backup_game(self, control):
+        game = control.game.name
         try:
-            result = await self.server.auto_backup()
+            result = await control.auto_backup()
         except ServerError as error:
-            log.warning('Scheduled backup skipped: %s', error)
+            log.warning('Scheduled %s backup skipped: %s', game, error)
             return
         except Exception:  # keep the loop alive; the next check tries again
-            log.exception('Scheduled backup check failed')
+            log.exception('Scheduled %s backup check failed', game)
             return
         if isinstance(result, str):
-            log.debug('Scheduled backup skipped: %s', result)
+            log.debug('Scheduled %s backup skipped: %s', game, result)
         elif result[0] not in (0, None):
             # Retried at the next check, since the newest backup is still out of date.
-            log.warning('Scheduled backup failed (exit code %s)', result[0])
+            log.warning('Scheduled %s backup failed (exit code %s)', game, result[0])
 
     async def close(self):
         self.auto_backup.cancel()

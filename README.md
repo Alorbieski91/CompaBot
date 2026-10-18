@@ -77,7 +77,8 @@ counts as ready once `logs\valheim_server.log` says `Game server connected`, pla
 the Steam query port 2457 (or from who the log says has connected), and `update` has no mods to
 refresh. Down and crash alerts and automatic updates (below) look after Valheim too, and so can the
 scheduled start and stop (turned off for Valheim until you set `VALHEIM_ACTIVE_HOURS=on`). Automatic
-backups still only look after Icarus.
+backups cover Valheim too, zipping `data` into `backups\Valheim-*.zip` whenever its world in
+`data\worlds_local` has changed while the server is off.
 
 | Command | Behavior |
 | --- | --- |
@@ -95,7 +96,8 @@ Backups only run while the server is off, because the running server keeps its s
 files open. `/server stop`, `/server start`, `/server update`, and the scheduled stops and restarts
 already back up with the server off. Every five minutes Compabot also checks whether the server
 is off and the world has changed since the newest backup (for example after a crash, or after the
-server was closed outside Compabot), and backs it up if so. `/server backup` refuses while the
+server was closed outside Compabot), and backs it up if so. It does this for each game whose
+scripts folder is on the PC, using that game's own backup script. `/server backup` refuses while the
 server is running. A failed backup is retried at the next check and written to the bot log. The
 backup script still deletes backups older than 14 days.
 
