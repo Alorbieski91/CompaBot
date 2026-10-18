@@ -7,6 +7,7 @@ over the defaults here.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 HERE = Path(__file__).resolve().parent
 
@@ -27,8 +28,9 @@ class GameProfile:
     backup_glob: str  # backup zips in <install root>\backups
     log_file: str  # server log, relative to the install root
     saves_dir: str  # world saves, relative to the install root
-    crashes_dir: str  # crash report folders, relative to the install root
+    crashes_dir: Optional[str]  # crash report folders, relative to the install root; None if the game has none
     ready_line: str  # log text that means players can join; {port} is the game port
+    log_format: str  # how the server log records joins and leaves: 'icarus' or 'valheim'
     features: frozenset = field(default_factory=frozenset)  # extras: mods, worlds, ores
 
     def supports(self, feature):
@@ -55,10 +57,34 @@ ICARUS = GameProfile(
     # Icarus uses Steam networking, so the game port never appears as a normal Windows
     # UDP endpoint; this log line is the reliable signal.
     ready_line='listening on port {port}',
+    log_format='icarus',
     features=frozenset({'mods', 'worlds', 'ores'}),
 )
 
-GAMES = {game.key: game for game in (ICARUS,)}
+VALHEIM = GameProfile(
+    key='valheim',
+    name='Valheim',
+    scripts_dir=r'C:\ValheimServer\scripts',
+    scripts={'start': 'Start-ValheimServer.ps1', 'stop': 'Stop-ValheimServer.ps1',
+             'backup': 'Backup-ValheimServer.ps1', 'update': 'Update-ValheimServer.ps1'},
+    status_script=HERE / 'icarus' / 'Get-IcarusStatus.ps1',  # nothing in it is Icarus-specific
+    process='valheim_server%',
+    server_name='Valheim server',
+    game_port='2456',
+    # Valheim answers Steam queries on the port after the game port.
+    query_port=2457,
+    max_players=10,
+    steam_app_id='896660',
+    backup_glob='Valheim-*.zip',
+    log_file=r'logs\valheim_server.log',
+    saves_dir=r'data\worlds_local',
+    crashes_dir=None,
+    # Logged once the world is loaded and the server is signed in to Steam.
+    ready_line='Game server connected',
+    log_format='valheim',
+)
+
+GAMES = {game.key: game for game in (ICARUS, VALHEIM)}
 DEFAULT_GAME = ICARUS.key
 
 

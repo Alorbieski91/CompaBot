@@ -10,7 +10,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from bot.features import install_features
-from bot.games import ICARUS
+from bot.games import ICARUS, VALHEIM
 from bot.icarus.active_hours import ActiveHours, parse_time
 from bot.icarus.auto_update import AutoUpdater
 from bot.icarus.monitor import install_monitor
@@ -22,7 +22,8 @@ log = logging.getLogger('compabot')
 
 class CompaBot(commands.Bot):
     def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR,
-                 update_hours=0, update_channel_id=None, alert_channel_id=None, active_hours=None):
+                 update_hours=0, update_channel_id=None, alert_channel_id=None, active_hours=None,
+                 valheim_scripts_dir=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -35,7 +36,8 @@ class CompaBot(commands.Bot):
         self.store = None
         # One ServerControl per game, by profile key. Background jobs still only watch Icarus.
         self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
-        self.servers = {ICARUS.key: self.server}
+        self.servers = {ICARUS.key: self.server,
+                        VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM)}
         self.update_channel_id = update_channel_id
         self.updater = AutoUpdater(self.server, self.announce, update_hours,
                                    state_file=BASE / 'data' / 'auto_update.json') if update_hours > 0 else None
@@ -153,8 +155,9 @@ class CompaBot(commands.Bot):
 
 
 def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None,
-               alert_channel_id=None, active_hours=None):
-    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id, active_hours)
+               alert_channel_id=None, active_hours=None, valheim_scripts_dir=None):
+    bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id, active_hours,
+                   valheim_scripts_dir)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -184,6 +187,7 @@ if __name__ == '__main__':
     if raw_alerts and (not raw_alerts.isdecimal() or int(raw_alerts) <= 0):
         raise SystemExit('ALERT_CHANNEL_ID must be a numeric Discord channel ID, or blank.')
     scripts_dir = os.getenv('ICARUS_SCRIPTS_DIR', '').strip() or DEFAULT_SCRIPTS_DIR
+    valheim_scripts_dir = os.getenv('VALHEIM_SCRIPTS_DIR', '').strip() or None
     raw_hours = os.getenv('AUTO_UPDATE_HOURS', '').strip() or '2'
     try:
         update_hours = float(raw_hours)
@@ -209,4 +213,4 @@ if __name__ == '__main__':
     create_bot(int(raw_guild) if raw_guild else None, [int(part) for part in raw_admins], scripts_dir,
                update_hours, int(raw_channel) if raw_channel else None,
                int(raw_alerts) if raw_alerts else None,
-               (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone)).run(token)
+               (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone), valheim_scripts_dir).run(token)

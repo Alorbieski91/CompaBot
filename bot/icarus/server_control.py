@@ -37,12 +37,16 @@ READY_TIMEOUT = 5 * 60
 READY_POLL = 10
 # The running server keeps its save and log files open, so backups only run while it is off.
 RUNNING_BACKUP = ("{name} is running, and its save files can't be backed up while it has them open. "
-                  '`/server stop` backs it up as soon as it has closed.')
+                  '{stop} backs it up as soon as it has closed.')
 # Server log lines that track who is connected. A join is logged with the player's name only,
 # so it is matched to the address from the connection accepted just before it.
 ACCEPTED = re.compile(r'NotifyAcceptingConnection accepted from: (\S+)')
 JOINED = re.compile(r'Join succeeded: (.+)')
 CLOSED = re.compile(r'UNetConnection::Close: \[UNetConnection\] RemoteAddr: ([^,\s]+)')
+# Valheim logs each connection by Steam ID, and the character name a little later on its own.
+VALHEIM_CONNECTED = re.compile(r'Got connection SteamID (\d+)')
+VALHEIM_CHARACTER = re.compile(r'Got character ZDOID from (.+?) : ')
+VALHEIM_CLOSED = re.compile(r'Closing socket (\d+)')
 # Discord shows at most 25 autocomplete choices.
 MAX_CHOICES = 25
 # Stay under Discord's 10 MB upload limit for servers without boosts.
@@ -99,6 +103,11 @@ class ServerControl:
         self.reply_window = REPLY_WINDOW
         self.mods = ModUpdater(self.install_root) if game.supports('mods') else None
 
+    def slash(self, command):
+        """A /server command to suggest in a reply, with game: added for any game but the default."""
+        game = '' if self.game.key == DEFAULT_GAME else f' game:{self.game.key}'
+        return f'`/server {command}{game}`'
+
     def powershell(self, *args, env=None):
         return self.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args], env)
 
@@ -110,7 +119,7 @@ class ServerControl:
         self.check_free()
         if action == 'backup':
             if (await self.status())['running']:
-                raise ServerError(RUNNING_BACKUP.format(name=f'**{self.name}**'))
+                raise ServerError(RUNNING_BACKUP.format(name=f'**{self.name}**', stop=self.slash('stop')))
             self.check_free()  # another action may have started during the status check
         self.busy = action
         if action == 'stop':
@@ -147,7 +156,7 @@ class ServerControl:
             state = await self.status()
             if state['running'] and state['players'].players:
                 raise ServerError(f'{online(state["players"])} on **{self.name}**, so I did not stop it. '
-                                  'Use `/server stop force:True` to stop it anyway.')
+                                  f"Use {self.slash('stop force:True')} to stop it anyway.")
         return await self.run_action('stop', window=window)
 
     async def restart(self, window=None):
@@ -266,6 +275,11 @@ class ServerControl:
         info = await asyncio.to_thread(self.query, self.query_port)
         if info:
             return info
+        if self.game.log_format == 'valheim':
+            online = valheim_players_online(self.current_log(started))
+            names = sorted(name for name in online.values() if name)
+            # Only list names when every connected player has one, so a count and its names agree.
+            return Info(len(online), self.max_players, tuple(names) if len(names) == len(online) else ())
         names = players_online(self.current_log(started))
         return Info(len(names), self.max_players, tuple(names))
 
@@ -275,7 +289,7 @@ class ServerControl:
 
     @property
     def crashes_dir(self):
-        return relative(self.install_root, self.game.crashes_dir)
+        return relative(self.install_root, self.game.crashes_dir) if self.game.crashes_dir else None
 
     @property
     def prospects_dir(self):
@@ -396,10 +410,10 @@ async def launch(control, window):
             return None, attempt > 1
         if result == 'loading':
             return (f'It is running but still not ready for players after {READY_TIMEOUT // 60} minutes. '
-                    'Check `/server status`; if it stays this way, try `/server restart`.'), attempt > 1
+                    f"Check {control.slash('status')}; if it stays this way, try {control.slash('restart')}."), attempt > 1
         log.warning('The server closed while loading (start %s of 2)', attempt)
     return ('It closed while loading, twice, without a crash report. '
-            'Check `data\\Saved\\Logs` on the PC, then try `/server start`.'), True
+            f"Check `{control.game.log_file}` on the PC, then try {control.slash('start')}."), True
 
 
 def online(players):
@@ -420,6 +434,23 @@ def players_online(log_text):
         elif match := CLOSED.search(line):
             online.pop(match[1], None)
     return sorted(online.values())
+
+
+def valheim_players_online(log_text):
+    """Who the Valheim server log says is connected: {Steam ID: character name, or None while still joining}."""
+    online = {}
+    for line in log_text.splitlines():
+        if match := VALHEIM_CONNECTED.search(line):
+            online[match[1]] = None
+        elif match := VALHEIM_CHARACTER.search(line):
+            # The name is logged again after each death, so only a newcomer's first one counts.
+            name = match[1].strip()
+            waiting = [steam_id for steam_id, known in online.items() if known is None]
+            if name not in online.values() and waiting:
+                online[waiting[-1]] = name
+        elif match := VALHEIM_CLOSED.search(line):
+            online.pop(match[1], None)
+    return online
 
 
 def set_prospect(path, prospect):
@@ -592,7 +623,7 @@ def install_server_commands(bot, controls):
         code, text = await control.update_with_mods()
         if code is None:
             again = f' world:{control.saved_prospect(world)}' if world else ''
-            return text + f' After that, start it with `/server start{again}`.'
+            return text + f" After that, start it with {control.slash('start' + again)}."
         if code != 0:
             return text + '\nThe server was not started.'
         try:

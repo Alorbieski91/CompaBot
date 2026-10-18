@@ -65,10 +65,18 @@ Discord user IDs allowed to use it, separated by commas (Developer Mode > right-
 user > Copy User ID). Everyone else is refused. If the scripts are not in
 `C:\IcarusServer\scripts`, set `ICARUS_SCRIPTS_DIR`.
 
-Every `/server` command takes an optional `game:` option that picks which game server it acts on.
-Icarus is the only game so far, and leaving it empty means Icarus. Each game's facts (folders,
-scripts, process name, ports, and which extras it has) are in one profile in `bot/games.py`.
-`mods`, `ores` and `start world:` are Icarus extras and are refused for a game without them.
+Every `/server` command takes an optional `game:` option that picks which game server it acts on:
+Icarus or Valheim. Leaving it empty means Icarus. Each game's facts (folders, scripts, process
+name, ports, and which extras it has) are in one profile in `bot/games.py`. `mods`, `ores` and
+`start world:` are Icarus extras and are refused for Valheim.
+
+`game:Valheim` runs the scripts in `C:\ValheimServer\scripts` (set `VALHEIM_SCRIPTS_DIR` if they
+are elsewhere) and reads `ServerName` and `GamePort` from their `config.psd1`. `status`, `start`,
+`stop`, `restart`, `backup` and `update` work as described below for Icarus, except that the server
+counts as ready once `logs\valheim_server.log` says `Game server connected`, players are counted on
+the Steam query port 2457 (or from who the log says has connected), and `update` has no mods to
+refresh. The scheduled start and stop, automatic updates, crash alerts and automatic backups still
+only look after Icarus.
 
 | Command | Behavior |
 | --- | --- |
