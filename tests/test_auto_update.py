@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 
 from bot.games import VALHEIM
-from bot.icarus.auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
-from bot.icarus import patch_notes
-from bot.icarus.server_control import SCRIPTS, ServerControl
-from bot.icarus.steam_query import Info
+from bot.servers.auto_update import WHILE_PLAYING, AutoUpdater, installed_build, public_build
+from bot.servers import patch_notes
+from bot.servers.control import SCRIPTS, ServerControl
+from bot.servers.steam_query import Info
 
 APP_INFO = '''AppID : 2089300, change number : 31234567
 "2089300"
@@ -66,7 +66,7 @@ class Runner:
 
     async def __call__(self, argv, env=None):
         script = Path(argv[-1]).name
-        if script == 'Get-IcarusStatus.ps1':
+        if script == 'Get-ServerStatus.ps1':
             return 0, '{"running":true,"started":1000}' if self.running else '{"running":false}'
         self.ran.append(script)
         return self.codes.get(script, 0), 'Done.'

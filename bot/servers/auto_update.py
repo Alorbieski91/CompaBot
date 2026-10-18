@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ..games import ICARUS
 from . import patch_notes
-from .server_control import ServerError, mod_report, report
+from .control import ServerError, mod_report, report
 
 log = logging.getLogger('compabot.autoupdate')
 

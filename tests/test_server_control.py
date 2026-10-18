@@ -10,9 +10,12 @@ from unittest.mock import AsyncMock
 
 from Compabot import create_bot
 from bot.games import GAMES, ICARUS, VALHEIM, relative
-from bot.icarus.mod_update import ModError
-from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, install_server_commands, players_online, read_config, run_process, valheim_players_online
-from bot.icarus.steam_query import Info
+from bot.games.icarus.mods import ModError
+from bot.games.icarus.players import players_online
+from bot.games.valheim.players import valheim_players_online
+from bot.servers.commands import install_server_commands
+from bot.servers.control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, read_config, run_process
+from bot.servers.steam_query import Info
 from tests.test_ore_deposits import WORLD, save
 
 ADMIN = 2
@@ -87,6 +90,13 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'restart', 'backup', 'update', 'mods', 'ores'})
         group.to_dict(self.bot.tree)
 
+    async def test_game_commands_come_from_the_games_that_have_them(self):
+        bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts, valheim_scripts_dir=self.scripts)
+        install_server_commands(bot, {'valheim': bot.servers['valheim']})
+        group = bot.tree.get_command('server')
+        self.assertEqual({c.name for c in group.commands}, {'status', 'start', 'stop', 'restart', 'backup', 'update'})
+        await bot.close()
+
     async def test_non_admins_are_refused_before_anything_runs(self):
         for name in ('status', 'stop', 'restart', 'backup', 'update', 'mods'):
             interaction = self.interaction(user=99)
@@ -137,19 +147,19 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('The server was not started.', self.sent(interaction))
 
     def add_worlds(self, *names):
-        prospects = self.bot.server.prospects_dir
+        prospects = self.bot.server.worlds.prospects_dir
         prospects.mkdir(parents=True, exist_ok=True)
         for name in names:
             (prospects / f'{name}.json').write_text('{}')
             (prospects / f'{name}.json.backup').write_text('{}')
 
     def write_settings(self, text=SETTINGS, encoding='utf-8'):
-        settings = self.bot.server.settings_file
+        settings = self.bot.server.worlds.settings_file
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_bytes(text.encode(encoding))
 
     def settings(self, encoding='utf-8'):
-        return self.bot.server.settings_file.read_bytes().decode(encoding)
+        return self.bot.server.worlds.settings_file.read_bytes().decode(encoding)
 
     async def test_start_with_world_switches_prospect_then_starts(self):
         self.add_worlds('ELMUNDOFOO', 'ZAWORLDOO')
@@ -157,7 +167,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.runner.result = (0, '{"running":false}')
         interaction = self.interaction()
         await self.command('start').callback(interaction, False, 'elmundofoo')
-        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Start-IcarusServer.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1', 'Start-IcarusServer.ps1'])
         self.assertTrue(self.sent(interaction).startswith('Loading **ELMUNDOFOO**.\nStart finished.'))
         expected = (SETTINGS.replace('LastProspectName=ZAWORLDOO', 'LastProspectName=ELMUNDOFOO')
                     .replace('ResumeProspect=False', 'ResumeProspect=True'))
@@ -188,7 +198,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('start').callback(interaction, False, 'ELMUNDOFOO')
         self.assertIn('already running. Stop it with `/server stop` to switch worlds.', self.sent(interaction))
-        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1'])
         self.assertEqual(self.settings(), SETTINGS)
 
     async def test_start_with_update_and_world_switches_after_updating(self):
@@ -198,7 +208,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.runner.result = (0, '{"running":false}')
         interaction = self.interaction()
         await self.command('start').callback(interaction, True, 'ELMUNDOFOO')
-        self.assertEqual(self.scripts_run(), ['Update-IcarusServer.ps1', 'Get-IcarusStatus.ps1', 'Start-IcarusServer.ps1'])
+        self.assertEqual(self.scripts_run(), ['Update-IcarusServer.ps1', 'Get-ServerStatus.ps1', 'Start-IcarusServer.ps1'])
         self.assertIn('\nLoading **ELMUNDOFOO**.\nStart finished.', self.sent(interaction))
         self.assertIn('LastProspectName=ELMUNDOFOO\r\n', self.settings())
 
@@ -206,7 +216,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.add_worlds('ELMUNDOFOO')
         self.write_settings('[/Script/Icarus.DedicatedServerSettings]\r\nMaxPlayers=2\r\n', 'utf-16')
         self.runner.result = (0, '{"running":false}')
-        self.assertEqual(await self.bot.server.choose_prospect('ELMUNDOFOO'), 'ELMUNDOFOO')
+        self.assertEqual(await self.bot.server.worlds.choose('ELMUNDOFOO'), 'ELMUNDOFOO')
         self.assertEqual(self.settings('utf-16'),
                          '[/Script/Icarus.DedicatedServerSettings]\r\nLastProspectName=ELMUNDOFOO\r\n'
                          'ResumeProspect=True\r\nLoadProspect=\r\nCreateProspect=\r\nMaxPlayers=2\r\n')
@@ -220,7 +230,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
     def add_save(self, name, raw):
         self.add_worlds(name)
-        (self.bot.server.prospects_dir / f'{name}.json').write_bytes(raw)
+        (self.bot.server.worlds.prospects_dir / f'{name}.json').write_bytes(raw)
 
     def files(self, interaction):
         return {f.filename: f.fp.read() for f in interaction.followup.send.call_args.kwargs['files']}
@@ -253,7 +263,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ores_falls_back_to_the_backup_save(self):
         self.add_save('ELMUNDOFOO', b'{"half written')
-        (self.bot.server.prospects_dir / 'ELMUNDOFOO.json.backup').write_bytes(save(WORLD))
+        (self.bot.server.worlds.prospects_dir / 'ELMUNDOFOO.json.backup').write_bytes(save(WORLD))
         interaction = self.interaction()
         await self.command('ores').callback(interaction, None, None)
         self.assertIn('5 deep ore deposits', self.sent(interaction))
@@ -495,10 +505,10 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.command('status').callback(interaction)
         argv, env = self.runner.calls[0]
         script = Path(argv[argv.index('-File') + 1])
-        self.assertEqual(script.name, 'Get-IcarusStatus.ps1')
+        self.assertEqual(script.name, 'Get-ServerStatus.ps1')
         self.assertIn("$ProgressPreference = 'SilentlyContinue'", script.read_text())
         self.assertNotIn('Get-NetUDPEndpoint', script.read_text())
-        self.assertEqual(env, {'ICARUS_ROOT': self.folder.name, 'GAME_PROCESS': 'IcarusServer%'})
+        self.assertEqual(env, {'GAME_ROOT': self.folder.name, 'GAME_PROCESS': 'IcarusServer%'})
         text = self.sent(interaction)
         self.assertIn('**CompaWorld** is online since <t:1790000000:R> (ready for players on port 17777)', text)
         self.assertIn('Players: 1/2.', text)
@@ -548,7 +558,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.write_backup(age=2 * 60 * 60)
         self.write_save(age=60 * 60)  # e.g. the server crashed after the last backup
         await self.bot.auto_backup()
-        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1', 'Get-ServerStatus.ps1', 'Backup-IcarusServer.ps1'])
 
     async def test_auto_backup_covers_each_installed_game(self):
         valheim_scripts = Path(self.folder.name) / 'valheim' / 'scripts'
@@ -565,14 +575,14 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         worlds.mkdir(parents=True)
         (worlds / '_main.0.fwl2').write_text('')
         await self.bot.auto_backup()
-        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1',
-                                              'Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-ValheimServer.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1', 'Get-ServerStatus.ps1', 'Backup-IcarusServer.ps1',
+                                              'Get-ServerStatus.ps1', 'Get-ServerStatus.ps1', 'Backup-ValheimServer.ps1'])
         # A Valheim failure does not stop the Icarus backup, and the reverse.
         self.runner.calls.clear()
         valheim.busy = 'update'
         self.write_save(age=0)
         await self.bot.auto_backup()
-        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1', 'Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1', 'Get-ServerStatus.ps1', 'Backup-IcarusServer.ps1'])
 
     async def test_auto_backup_skips(self):
         running = '{"running":true,"started":1790000000}'
@@ -585,7 +595,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
             self.write_backup(backup_age)
             self.write_save(save_age)
             self.assertEqual(await self.bot.server.auto_backup(), reason)
-            self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1'])
+            self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1'])
 
     async def test_auto_backup_skips_without_saves(self):
         self.runner.result = (0, '{"running":false}')
@@ -601,7 +611,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('backup').callback(interaction)
         self.assertIn("can't be backed up while it has them open", self.sent(interaction))
-        self.assertEqual(self.scripts_run(), ['Get-IcarusStatus.ps1'])
+        self.assertEqual(self.scripts_run(), ['Get-ServerStatus.ps1'])
         self.assertIsNone(self.bot.server.busy)
 
     async def test_status_offline_without_backups(self):
@@ -676,7 +686,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.runner.result = (0, '{"running":false}')
         await self.command('backup').callback(self.interaction())
         await self.command('backup').callback(self.interaction(), 'Icarus')
-        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'] * 2)
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1', 'Backup-IcarusServer.ps1'] * 2)
 
     async def test_the_chosen_game_runs_its_own_scripts(self):
         await self.command('stop').callback(self.interaction(), True, 'valheim')
@@ -698,7 +708,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runner.calls, [])
 
     async def test_world_autocomplete_follows_the_game(self):
-        prospects = self.bot.server.prospects_dir
+        prospects = self.bot.server.worlds.prospects_dir
         prospects.mkdir(parents=True)
         (prospects / 'ELMUNDOFOO.json').write_text('{}')
         worlds = self.command('start')._params['world'].autocomplete
@@ -730,7 +740,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('status').callback(interaction, 'valheim')
         status_env = self.runner.calls[0][1]
-        self.assertEqual(status_env, {'ICARUS_ROOT': str(self.valheim.install_root), 'GAME_PROCESS': 'valheim_server%'})
+        self.assertEqual(status_env, {'GAME_ROOT': str(self.valheim.install_root), 'GAME_PROCESS': 'valheim_server%'})
         text = interaction.followup.send.call_args.args[0]
         self.assertIn('ready for players on port 2456', text)
         self.assertIn('Players: 1/10 (Bjorn).', text)
@@ -748,14 +758,14 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interaction.followup.send.call_args.args[0],
                          'Bjorn is online on **Valheim server**, so I did not stop it. '
                          'Use `/server stop force:True game:valheim` to stop it anyway.')
-        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1'])
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1'])
 
     async def test_valheim_backup_refused_while_running(self):
         self.valheim_running(VALHEIM_LOG)
         interaction = self.interaction()
         await self.command('backup').callback(interaction, 'valheim')
         self.assertIn('`/server stop game:valheim` backs it up', interaction.followup.send.call_args.args[0])
-        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1'])
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1'])
 
     async def test_valheim_restart_waits_for_its_ready_line(self):
         self.valheim_running(VALHEIM_LOG.replace('Got connection', 'x').replace('Got character', 'x'))
@@ -763,7 +773,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
 
         async def runner(argv, env=None):
             self.runner.calls.append((argv, env))
-            if Path(argv[-1]).name == 'Get-IcarusStatus.ps1':
+            if Path(argv[-1]).name == 'Get-ServerStatus.ps1':
                 if next(statuses, True):
                     return 0, f'{{"running":true,"started":{int(time.time()) - 60}}}'
                 return 0, '{"running":false}'
@@ -773,8 +783,8 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('restart').callback(interaction, 'valheim')
         self.assertEqual(interaction.followup.send.call_args.args[0], '**Valheim server** restarted and is ready for players.')
-        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1', 'Stop-ValheimServer.ps1', 'Get-IcarusStatus.ps1',
-                                      'Start-ValheimServer.ps1', 'Get-IcarusStatus.ps1'])
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1', 'Stop-ValheimServer.ps1', 'Get-ServerStatus.ps1',
+                                      'Start-ValheimServer.ps1', 'Get-ServerStatus.ps1'])
 
 
 class ProfileTests(unittest.TestCase):
@@ -786,7 +796,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(SCRIPTS['start'], 'Start-IcarusServer.ps1')
         self.assertTrue(ICARUS.status_script.is_file())
         self.assertEqual(control.crashes_dir, control.install_root / 'data' / 'Saved' / 'Crashes')
-        self.assertEqual(control.prospects_dir,
+        self.assertEqual(control.worlds.prospects_dir,
                          control.install_root / 'data' / 'Saved' / 'PlayerData' / 'DedicatedServer' / 'Prospects')
 
     def test_valheim_profile_defaults_and_config(self):
@@ -795,6 +805,7 @@ class ProfileTests(unittest.TestCase):
                          ('Valheim server', '2456', 2457, 10))
         self.assertIsNone(control.crashes_dir)
         self.assertIsNone(control.mods)
+        self.assertIsNone(control.worlds)
         self.assertEqual(control.slash('start'), '`/server start game:valheim`')
         with tempfile.TemporaryDirectory() as folder:
             # The real config.psd1 on the server PC, with the password left out.

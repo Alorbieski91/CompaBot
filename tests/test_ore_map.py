@@ -5,9 +5,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from bot.icarus.ore_deposits import find_deposits
-from bot.icarus.ore_map import CODES, LEGEND_WIDTH, MAP_SIZE, ORANGE, render, rgb, to_px
-from bot.icarus.ore_deposits import ORES
+from bot.games.icarus.ore_deposits import find_deposits
+from bot.games.icarus.ore_map import CODES, LEGEND_WIDTH, MAP_SIZE, ORANGE, render, rgb, to_px
+from bot.games.icarus.ore_deposits import ORES
 from tests.test_ore_deposits import WORLD
 
 

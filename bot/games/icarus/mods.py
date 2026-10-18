@@ -13,6 +13,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ...servers.profile import ModError
+
 log = logging.getLogger('compabot.mods')
 
 MODINFO_URL = 'https://raw.githubusercontent.com/laanp/Icarus_Mods_Separated/main/modinfo.json'
@@ -21,10 +23,6 @@ README_REV = re.compile(r'Rev\.\s*(?P<rev>\d+(?:\.\d+){3})\s*\(Week:\s*(?P<week>
 # UE4 .pak files end with a footer holding this magic number.
 PAK_MAGIC = bytes.fromhex('e1126f5a')
 OLD_COPIES = 5
-
-
-class ModError(Exception):
-    pass
 
 
 def fetch(url, timeout=60):

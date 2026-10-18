@@ -12,9 +12,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from bot.games import ICARUS, VALHEIM
-from bot.icarus.monitor import ServerMonitor, crash_archive, crash_summary, latest_crash, post
-from bot.icarus.server_control import ServerError
-from bot.icarus.steam_query import Info, parse_info, query_info
+from bot.servers.monitor import ServerMonitor, crash_archive, crash_summary, latest_crash, post
+from bot.servers.control import ServerError
+from bot.servers.steam_query import Info, parse_info, query_info
 
 CONTEXT = """<?xml version="1.0" encoding="UTF-8"?>
 <FGenericCrashContext><RuntimeProperties>

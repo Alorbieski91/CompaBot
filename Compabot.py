@@ -11,10 +11,11 @@ from dotenv import load_dotenv
 
 from bot.features import install_features
 from bot.games import GAMES, ICARUS, VALHEIM
-from bot.icarus.active_hours import ActiveHours, parse_time
-from bot.icarus.auto_update import AutoUpdater
-from bot.icarus.monitor import install_monitor
-from bot.icarus.server_control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit, install_server_commands
+from bot.servers.active_hours import ActiveHours, parse_time
+from bot.servers.auto_update import AutoUpdater
+from bot.servers.commands import install_server_commands
+from bot.servers.control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit
+from bot.servers.monitor import install_monitor
 from bot.storage import Store
 
 BASE = Path(__file__).resolve().parent
