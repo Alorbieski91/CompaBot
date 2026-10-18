@@ -93,8 +93,9 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         async def notify(text):
             self.messages.append(text)
 
-        async def query(steamcmd):
+        async def query(steamcmd, app_id):
             self.queries.append(steamcmd)
+            self.assertEqual(app_id, '2089300')
             return APP_INFO
         async def news():
             return NEWS
@@ -186,7 +187,7 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.queries, runner.ran), ([], []))
 
     async def test_steamcmd_trouble_waits_for_the_next_check(self):
-        async def broken(steamcmd):
+        async def broken(steamcmd, app_id):
             raise asyncio.TimeoutError
         self.updater.query = broken
         runner = self.use(running=False)
@@ -301,7 +302,7 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.messages), 1)
 
     async def test_mods_are_checked_when_steamcmd_is_down(self):
-        async def broken(steamcmd):
+        async def broken(steamcmd, app_id):
             raise asyncio.TimeoutError
         self.updater.query = broken
         self.mod_release()

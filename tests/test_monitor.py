@@ -71,6 +71,7 @@ class FakeControl:
     def __init__(self, root):
         self.name = 'CompaWorld'
         self.install_root = Path(root)
+        self.crashes_dir = self.install_root / 'data' / 'Saved' / 'Crashes'
         self.query_port = 27015
         self.stopped_at = float('-inf')
         self.info = None

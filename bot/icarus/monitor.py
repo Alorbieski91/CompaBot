@@ -131,7 +131,7 @@ class ServerMonitor:
         started, self.started = self.started, None
         if now - self.control.stopped_at < INTENTIONAL_GRACE:
             return None
-        crash = latest_crash(self.control.install_root / 'data' / 'Saved' / 'Crashes', (started or now) - 60)
+        crash = latest_crash(self.control.crashes_dir, (started or now) - 60)
         if crash:
             summary = crash_summary(crash)
             text = f'{name} crashed <t:{int(crash.stat().st_mtime)}:R>.'

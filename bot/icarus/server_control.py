@@ -1,4 +1,4 @@
-"""/server commands that run the Icarus PowerShell scripts on this Windows host."""
+"""/server commands that run a game server's PowerShell scripts on this Windows host."""
 import asyncio
 import io
 import json
@@ -14,6 +14,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
+from ..games import DEFAULT_GAME, ICARUS, relative
 from .mod_update import ModError, ModUpdater
 from .ore_deposits import ORE_MAP_SITE, ORES, ProspectError, listing, ore_label, read_deposits, summary
 
@@ -25,14 +26,12 @@ from .steam_query import Info, query_info
 
 log = logging.getLogger('compabot.server')
 
-DEFAULT_SCRIPTS_DIR = r'C:\IcarusServer\scripts'
-SCRIPTS = {'start': 'Start-IcarusServer.ps1', 'stop': 'Stop-IcarusServer.ps1',
-           'backup': 'Backup-IcarusServer.ps1', 'update': 'Update-IcarusServer.ps1'}
+DEFAULT_SCRIPTS_DIR = ICARUS.scripts_dir
+SCRIPTS = ICARUS.scripts
 LABELS = {'start': 'Start', 'stop': 'Stop', 'backup': 'Backup', 'update': 'Update', 'mods': 'Mod update',
           'restart': 'Restart'}
 # Interaction follow-ups expire after 15 minutes, so stop waiting a little before that.
 REPLY_WINDOW = 14 * 60
-STATUS_SCRIPT = Path(__file__).resolve().parent / 'Get-IcarusStatus.ps1'
 # How long a freshly started server gets to load its world (usually 10-20 seconds), and how often to look.
 READY_TIMEOUT = 5 * 60
 READY_POLL = 10
@@ -81,15 +80,16 @@ async def run_process(argv, env=None):
 
 
 class ServerControl:
-    def __init__(self, admins, scripts_dir=DEFAULT_SCRIPTS_DIR, run=run_process):
+    def __init__(self, admins, scripts_dir=None, run=run_process, game=ICARUS):
+        self.game = game
         self.admins = frozenset(admins)
-        self.scripts_dir = Path(scripts_dir)
+        self.scripts_dir = Path(scripts_dir or game.scripts_dir)
         config = read_config(self.scripts_dir / 'config.psd1')
         self.install_root = Path(config.get('InstallRoot') or self.scripts_dir.parent)
-        self.name = config.get('ServerName', 'Icarus server')
-        self.port = config.get('GamePort', '17777')
-        self.query_port = int(config.get('QueryPort', '27015'))
-        self.max_players = int(config.get('MaxPlayers', '2'))
+        self.name = config.get('ServerName', game.server_name)
+        self.port = config.get('GamePort', game.game_port)
+        self.query_port = int(config.get('QueryPort', game.query_port))
+        self.max_players = int(config.get('MaxPlayers', game.max_players))
         self.run = run
         self.query = query_info
         self.windows = os.name == 'nt'
@@ -97,14 +97,14 @@ class ServerControl:
         self.holder = None  # the task running a restart, which may run its own stop and start
         self.stopped_at = float('-inf')
         self.reply_window = REPLY_WINDOW
-        self.mods = ModUpdater(self.install_root)
+        self.mods = ModUpdater(self.install_root) if game.supports('mods') else None
 
     def powershell(self, *args, env=None):
         return self.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', *args], env)
 
     async def run_action(self, action, *args, window=None):
         """Run one script. Returns (exit code, output); exit code None means it is still running."""
-        script = self.scripts_dir / SCRIPTS[action]
+        script = self.scripts_dir / self.game.scripts[action]
         if not script.is_file():
             raise ServerError(f'Script not found: {script}')
         self.check_free()
@@ -190,9 +190,9 @@ class ServerControl:
         """Update the game, then its mods if that worked. Returns (update exit code, report)."""
         code, output = await self.run_action('update', window=window)
         text = report('Update', code, output)
-        if code == 0:
+        if code == 0 and self.mods:
             text = mod_report(text, await self.update_mods())
-        elif code is None:
+        elif code is None and self.mods:
             text += ' Then run `/server mods` to update the mods.'
         return code, text
 
@@ -210,8 +210,8 @@ class ServerControl:
             self.busy = None
 
     async def status(self):
-        code, out = await self.powershell('-File', str(STATUS_SCRIPT),
-                                          env={'ICARUS_ROOT': str(self.install_root)})
+        code, out = await self.powershell('-File', str(self.game.status_script),
+                                          env={'ICARUS_ROOT': str(self.install_root), 'GAME_PROCESS': self.game.process})
         if code != 0:
             raise ServerError(f'Status check failed:\n{tail(out)}')
         # Windows PowerShell can mix progress records (#< CLIXML) into the output, so
@@ -224,7 +224,7 @@ class ServerControl:
         if state['running']:
             state['ready'] = self.listening(state['started'])
             state['players'] = await self.players(state['started'])
-        backups = list((self.install_root / 'backups').glob('Icarus-*.zip'))
+        backups = list((self.install_root / 'backups').glob(self.game.backup_glob))
         state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
         return state
 
@@ -253,7 +253,7 @@ class ServerControl:
 
     def current_log(self, started):
         """The server log text, or '' if it is missing or left over from an earlier run."""
-        log_file = self.install_root / 'data' / 'Saved' / 'Logs' / 'Icarus.log'
+        log_file = relative(self.install_root, self.game.log_file)
         try:
             if log_file.stat().st_mtime < started:
                 return ''
@@ -270,16 +270,16 @@ class ServerControl:
         return Info(len(names), self.max_players, tuple(names))
 
     def listening(self, started):
-        """Whether the current server log says the game port is accepting players.
+        """Whether the current server log says the game port is accepting players."""
+        return self.game.ready_line.format(port=self.port) in self.current_log(started)
 
-        Icarus uses Steam networking, so the game port never appears as a normal
-        Windows UDP endpoint; the log line is the reliable signal.
-        """
-        return f'listening on port {self.port}' in self.current_log(started)
+    @property
+    def crashes_dir(self):
+        return relative(self.install_root, self.game.crashes_dir)
 
     @property
     def prospects_dir(self):
-        return self.install_root / 'data' / 'Saved' / 'PlayerData' / 'DedicatedServer' / 'Prospects'
+        return relative(self.install_root, self.game.saves_dir) / 'DedicatedServer' / 'Prospects'
 
     @property
     def settings_file(self):
@@ -358,7 +358,7 @@ class ServerControl:
 
     def newest_save(self):
         """When the world save files last changed, or None if there are none."""
-        saves = self.install_root / 'data' / 'Saved' / 'PlayerData'
+        saves = relative(self.install_root, self.game.saves_dir)
         try:
             return max((p.stat().st_mtime for p in saves.rglob('*') if p.is_file()), default=None)
         except OSError:
@@ -498,33 +498,57 @@ def describe(control, state):
     return '\n'.join(lines)
 
 
-def install_server_commands(bot, control):
-    server = app_commands.Group(name='server', description='Control the Icarus server (server admins only).', guild_only=True)
+def install_server_commands(bot, controls):
+    """Add the /server group. controls maps each game's key to its ServerControl (a lone ServerControl works too)."""
+    if isinstance(controls, ServerControl):
+        controls = {controls.game.key: controls}
+    default = controls.get(DEFAULT_GAME) or next(iter(controls.values()))
+    admins = default.admins
+    games = [app_commands.Choice(name=control.game.name, value=key) for key, control in controls.items()]
+    pick_game = f'Which game server. Leave empty for {default.game.name}.'
+    server = app_commands.Group(name='server', description='Control the game servers (server admins only).', guild_only=True)
 
-    async def allowed(interaction):
-        if interaction.user.id not in control.admins:
+    def pick(game):
+        """The ServerControl for a game: option; blank means the default game."""
+        control = controls.get((game or default.game.key).strip().lower())
+        if control is None:
+            known = ', '.join(c.game.name for c in controls.values())
+            raise ServerError(f'Compabot does not run a `{discord.utils.escape_markdown(game)}` server. Games: {known}.')
+        return control
+
+    def needs(control, feature, what):
+        """Refuse an extra (mods, worlds, ores) the chosen game does not have."""
+        if not control.game.supports(feature):
+            others = ' or '.join(c.game.name for c in controls.values() if c.game.supports(feature))
+            raise ServerError(f'{what} only works for {others}, not {control.game.name}.')
+
+    async def begin(interaction, game):
+        """Check who is asking and pick the game, then show that the bot is thinking. Returns the control or None."""
+        if interaction.user.id not in admins:
             await interaction.response.send_message('Only the server admins can use /server, compa.', ephemeral=True)
-            return False
+            return None
+        try:
+            control = pick(game)
+        except ServerError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return None
         if not control.windows:
             await interaction.response.send_message('Server commands only work when Compabot runs on the Windows server host.', ephemeral=True)
-            return False
-        return True
-
-    async def run(interaction, action, *args):
-        if not await allowed(interaction):
-            return
+            return None
         await interaction.response.defer(thinking=True)
-        try:
-            text = report(LABELS[action], *await control.run_action(action, *args))
-        except ServerError as error:
-            text = str(error)
-        await interaction.followup.send(text)
+        return control
 
-    @server.command(name='status', description='Show whether the Icarus server is running and when it was last backed up.')
-    async def status(interaction: discord.Interaction):
-        if not await allowed(interaction):
+    def chosen(interaction):
+        """The control for the game: option typed so far, for autocomplete; None if it has no such game."""
+        game = getattr(getattr(interaction, 'namespace', None), 'game', None)
+        return controls.get((game or default.game.key).lower())
+
+    @server.command(name='status', description='Show whether a game server is running and when it was last backed up.')
+    @app_commands.describe(game=pick_game)
+    @app_commands.choices(game=games)
+    async def status(interaction: discord.Interaction, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        await interaction.response.defer(thinking=True)
         try:
             text = describe(control, await control.status())
         except ServerError as error:
@@ -532,33 +556,37 @@ def install_server_commands(bot, control):
         await interaction.followup.send(text)
 
     async def worlds(interaction: discord.Interaction, current: str):
-        if interaction.user.id not in control.admins:
+        control = chosen(interaction)
+        if interaction.user.id not in admins or not control or not control.game.supports('worlds'):
             return []
         names = [name for name in control.prospects() if current.lower() in name.lower()]
         return [app_commands.Choice(name=name, value=name) for name in names[:MAX_CHOICES]]
 
-    @server.command(name='start', description='Back up and start the Icarus server, optionally updating it and its mods first.')
-    @app_commands.describe(update='Update the game and its mods before starting.',
-                           world='Saved world (prospect) to load. Leave empty to load the last one.')
+    @server.command(name='start', description='Back up and start a game server, optionally updating it (and its mods) first.')
+    @app_commands.describe(update='Update the game (and its mods) before starting.',
+                           world='Icarus only: saved world (prospect) to load. Leave empty to load the last one.',
+                           game=pick_game)
     @app_commands.autocomplete(world=worlds)
-    async def start(interaction: discord.Interaction, update: bool = False, world: Optional[str] = None):
-        if not update and not world:
-            await run(interaction, 'start')
+    @app_commands.choices(game=games)
+    async def start(interaction: discord.Interaction, update: bool = False, world: Optional[str] = None,
+                    game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        if not await allowed(interaction):
-            return
-        await interaction.response.defer(thinking=True)
         began = time.monotonic()
         try:
-            if not update:
+            if world:
+                needs(control, 'worlds', 'Picking a world')
+            if not update and not world:
+                text = report('Start', *await control.run_action('start'))
+            elif not update:
                 text = f'Loading **{await control.choose_prospect(world)}**.\n' + report('Start', *await control.run_action('start'))
             else:
-                text = await update_then_start(world, began)
+                text = await update_then_start(control, world, began)
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(fit(text))
 
-    async def update_then_start(world, began):
+    async def update_then_start(control, world, began):
         if world:
             control.saved_prospect(world)  # refuse an unknown world before spending time on the update
         code, text = await control.update_with_mods()
@@ -577,7 +605,7 @@ def install_server_commands(bot, control):
             return text + f'\n{error}\nThe server was not started.'
 
     async def ores(interaction: discord.Interaction, current: str):
-        if interaction.user.id not in control.admins:
+        if interaction.user.id not in admins:
             return []
         return [app_commands.Choice(name=ore_label(ore), value=ore) for ore in ORES
                 if current.lower() in ore_label(ore).lower()][:MAX_CHOICES]
@@ -595,17 +623,19 @@ def install_server_commands(bot, control):
         except (discord.HTTPException, ProspectError) as error:
             raise ServerError(f"Couldn't read `{discord.utils.escape_markdown(file.filename)}`: {error}") from None
 
-    @server.command(name='ores', description='Map the deep ore deposits and oil wells in a saved world.')
+    @server.command(name='ores', description='Icarus only: map the deep ore deposits and oil wells in a saved world.')
     @app_commands.describe(world='Saved world (prospect). Leave empty for the one the server loads.',
                            ore='Only show where this ore (or oil) is.',
-                           file='A prospect .json from your own PC to read instead of a server world.')
+                           file='A prospect .json from your own PC to read instead of a server world.',
+                           game=pick_game)
     @app_commands.autocomplete(world=worlds, ore=ores)
+    @app_commands.choices(game=games)
     async def deep_ores(interaction: discord.Interaction, world: Optional[str] = None, ore: Optional[str] = None,
-                        file: Optional[discord.Attachment] = None):
-        if not await allowed(interaction):
+                        file: Optional[discord.Attachment] = None, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        await interaction.response.defer(thinking=True)
         try:
+            needs(control, 'ores', 'The ore map')
             if file:
                 prospect, raw, found_map, deposits = await read_upload(file)
             else:
@@ -632,52 +662,64 @@ def install_server_commands(bot, control):
             text += f'\nThe save is too big to attach here, so get `{prospect}.json` from the server for <{ORE_MAP_SITE}>.'
         await interaction.followup.send(text, files=files)
 
-    @server.command(name='stop', description='Close the Icarus server safely and take a final backup.')
-    @app_commands.describe(force='Stop it even if players are online.')
-    async def stop(interaction: discord.Interaction, force: bool = False):
-        if not await allowed(interaction):
+    @server.command(name='stop', description='Close a game server safely and take a final backup.')
+    @app_commands.describe(force='Stop it even if players are online.', game=pick_game)
+    @app_commands.choices(game=games)
+    async def stop(interaction: discord.Interaction, force: bool = False, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        await interaction.response.defer(thinking=True)
         try:
             text = report('Stop', *await control.stop(force))
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(text)
 
-    @server.command(name='restart', description='Stop the Icarus server, wait for it to close, then start it again (only when nobody is on).')
-    async def restart(interaction: discord.Interaction):
-        if not await allowed(interaction):
+    @server.command(name='restart', description='Stop a game server, wait for it to close, then start it again (only when nobody is on).')
+    @app_commands.describe(game=pick_game)
+    @app_commands.choices(game=games)
+    async def restart(interaction: discord.Interaction, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        await interaction.response.defer(thinking=True)
         try:
             text = await control.restart()
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(fit(text))
 
-    @server.command(name='backup', description='Back up the Icarus save files now.')
-    async def backup(interaction: discord.Interaction):
-        await run(interaction, 'backup')
-
-    @server.command(name='update', description='Update the Icarus server through SteamCMD, then its mods (stop it first).')
-    async def update(interaction: discord.Interaction):
-        if not await allowed(interaction):
+    @server.command(name='backup', description="Back up a game server's save files now.")
+    @app_commands.describe(game=pick_game)
+    @app_commands.choices(game=games)
+    async def backup(interaction: discord.Interaction, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        await interaction.response.defer(thinking=True)
+        try:
+            text = report(LABELS['backup'], *await control.run_action('backup'))
+        except ServerError as error:
+            text = str(error)
+        await interaction.followup.send(text)
+
+    @server.command(name='update', description='Update a game server through SteamCMD, then its mods (stop it first).')
+    @app_commands.describe(game=pick_game)
+    @app_commands.choices(game=games)
+    async def update(interaction: discord.Interaction, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
+            return
         try:
             text = (await control.update_with_mods())[1]
         except ServerError as error:
             text = str(error)
         await interaction.followup.send(text)
 
-    @server.command(name='mods', description='Update the server mods to their latest release (stop the server first).')
-    async def mods(interaction: discord.Interaction):
-        if not await allowed(interaction):
+    @server.command(name='mods', description='Icarus only: update the server mods to their latest release (stop the server first).')
+    @app_commands.describe(game=pick_game)
+    @app_commands.choices(game=games)
+    async def mods(interaction: discord.Interaction, game: Optional[str] = None):
+        if not (control := await begin(interaction, game)):
             return
-        await interaction.response.defer(thinking=True)
         try:
+            needs(control, 'mods', 'Mod updates')
             if (await control.status())['running']:
-                raise ServerError('Stop the Icarus server before updating its mods.')
+                raise ServerError(f'Stop the {control.game.name} server before updating its mods.')
             text = '\n'.join(await control.update_mods())
         except ServerError as error:
             text = str(error)

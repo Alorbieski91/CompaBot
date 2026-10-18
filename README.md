@@ -65,6 +65,11 @@ Discord user IDs allowed to use it, separated by commas (Developer Mode > right-
 user > Copy User ID). Everyone else is refused. If the scripts are not in
 `C:\IcarusServer\scripts`, set `ICARUS_SCRIPTS_DIR`.
 
+Every `/server` command takes an optional `game:` option that picks which game server it acts on.
+Icarus is the only game so far, and leaving it empty means Icarus. Each game's facts (folders,
+scripts, process name, ports, and which extras it has) are in one profile in `bot/games.py`.
+`mods`, `ores` and `start world:` are Icarus extras and are refused for a game without them.
+
 | Command | Behavior |
 | --- | --- |
 | `/server status` | Whether the server is running, since when, whether it is ready for players on port 17777 (read from the server log), how many players are on, and the last backup time. |
@@ -288,8 +293,9 @@ Install-CompaBotStartup.ps1  creates or removes the startup and watchdog tasks
 bot/
   features.py                quotes, favorites, /pick and /say
   storage.py                 SQLite storage for quotes and favorites
+  games.py                   one profile per game server (paths, scripts, ports, extras)
   icarus/
-    server_control.py        /server commands and the Icarus script runner
+    server_control.py        /server commands and the game script runner
     Get-IcarusStatus.ps1     tells server_control.py whether the server is running
     monitor.py               down, crash and back-up alerts
     steam_query.py           player count from the Steam query port

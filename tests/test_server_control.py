@@ -4,11 +4,13 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from Compabot import create_bot
+from bot.games import GAMES, ICARUS, relative
 from bot.icarus.mod_update import ModError
 from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, install_server_commands, players_online, read_config, run_process
 from bot.icarus.steam_query import Info
@@ -488,7 +490,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(script.name, 'Get-IcarusStatus.ps1')
         self.assertIn("$ProgressPreference = 'SilentlyContinue'", script.read_text())
         self.assertNotIn('Get-NetUDPEndpoint', script.read_text())
-        self.assertEqual(env, {'ICARUS_ROOT': self.folder.name})
+        self.assertEqual(env, {'ICARUS_ROOT': self.folder.name, 'GAME_PROCESS': 'IcarusServer%'})
         text = self.sent(interaction)
         self.assertIn('**CompaWorld** is online since <t:1790000000:R> (ready for players on port 17777)', text)
         self.assertIn('Players: 1/2.', text)
@@ -590,6 +592,109 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction = self.interaction()
         await self.command('status').callback(interaction)
         self.assertIn('Status check failed', self.sent(interaction))
+
+
+class GameOptionTests(unittest.IsolatedAsyncioTestCase):
+    """The game: option on every /server command, with Icarus plus a made-up game that has no extras."""
+
+    async def asyncSetUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.runner = FakeRunner()
+        self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts('icarus', ICARUS))
+        self.plain = replace(ICARUS, key='plain', name='Plain', features=frozenset(),
+                             scripts={action: f'{action}-plain.ps1' for action in ICARUS.scripts})
+        self.bot.servers['plain'] = ServerControl([ADMIN], self.scripts('plain', self.plain), game=self.plain)
+        for control in self.bot.servers.values():
+            control.run = self.runner
+            control.windows = True
+            control.query = lambda port: None
+        install_server_commands(self.bot, self.bot.servers)
+
+    async def asyncTearDown(self):
+        await self.bot.close()
+        self.folder.cleanup()
+
+    def scripts(self, name, game):
+        root = Path(self.folder.name) / name
+        scripts = root / 'scripts'
+        scripts.mkdir(parents=True)
+        for script in game.scripts.values():
+            (scripts / script).write_text('')
+        (scripts / 'config.psd1').write_text(f"@{{\n    InstallRoot = '{root}'\n}}\n")
+        return scripts
+
+    def command(self, name):
+        return self.bot.tree.get_command('server').get_command(name)
+
+    def interaction(self, game=None):
+        return SimpleNamespace(user=SimpleNamespace(id=ADMIN), namespace=SimpleNamespace(game=game),
+                               response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+                               followup=SimpleNamespace(send=AsyncMock()))
+
+    def ran(self):
+        return [Path(argv[-1]).name for argv, _ in self.runner.calls]
+
+    async def test_every_command_offers_each_game(self):
+        for command in self.bot.tree.get_command('server').commands:
+            choices = command._params['game'].choices
+            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Plain', 'plain')], command.name)
+            self.assertFalse(command._params['game'].required)
+        self.bot.tree.get_command('server').to_dict(self.bot.tree)
+
+    async def test_blank_game_is_icarus(self):
+        self.runner.result = (0, '{"running":false}')
+        await self.command('backup').callback(self.interaction())
+        await self.command('backup').callback(self.interaction(), 'Icarus')
+        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'] * 2)
+
+    async def test_the_chosen_game_runs_its_own_scripts(self):
+        await self.command('stop').callback(self.interaction(), True, 'plain')
+        self.assertEqual(self.ran(), ['stop-plain.ps1'])
+
+    async def test_an_unknown_game_is_refused_before_anything_runs(self):
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'minecraft')
+        self.assertIn('does not run a `minecraft` server. Games: Icarus, Plain.', interaction.response.send_message.call_args.args[0])
+        self.assertTrue(interaction.response.send_message.call_args.kwargs['ephemeral'])
+        self.assertEqual(self.runner.calls, [])
+
+    async def test_icarus_extras_are_refused_for_other_games(self):
+        for name, args, what in (('mods', (), 'Mod updates'), ('ores', (None, None, None), 'The ore map'),
+                                 ('start', (False, 'ELMUNDOFOO'), 'Picking a world')):
+            interaction = self.interaction()
+            await self.command(name).callback(interaction, *args, 'plain')
+            self.assertEqual(interaction.followup.send.call_args.args[0], f'{what} only works for Icarus, not Plain.')
+        self.assertEqual(self.runner.calls, [])
+
+    async def test_world_autocomplete_follows_the_game(self):
+        prospects = self.bot.server.prospects_dir
+        prospects.mkdir(parents=True)
+        (prospects / 'ELMUNDOFOO.json').write_text('{}')
+        worlds = self.command('start')._params['world'].autocomplete
+        self.assertEqual([c.value for c in await worlds(self.interaction(), '')], ['ELMUNDOFOO'])
+        self.assertEqual(await worlds(self.interaction('plain'), ''), [])
+
+    async def test_update_skips_mods_for_a_game_without_them(self):
+        interaction = self.interaction()
+        await self.command('update').callback(interaction, 'plain')
+        self.assertEqual(self.ran(), ['update-plain.ps1'])
+        self.assertNotIn('Mods', interaction.followup.send.call_args.args[0])
+
+
+class ProfileTests(unittest.TestCase):
+    def test_icarus_profile_keeps_the_old_defaults(self):
+        control = ServerControl([], Path(tempfile.gettempdir()) / 'no-such-scripts')
+        self.assertIs(control.game, GAMES['icarus'])
+        self.assertEqual((control.name, control.port, control.query_port, control.max_players),
+                         ('Icarus server', '17777', 27015, 2))
+        self.assertEqual(SCRIPTS['start'], 'Start-IcarusServer.ps1')
+        self.assertTrue(ICARUS.status_script.is_file())
+        self.assertEqual(control.crashes_dir, control.install_root / 'data' / 'Saved' / 'Crashes')
+        self.assertEqual(control.prospects_dir,
+                         control.install_root / 'data' / 'Saved' / 'PlayerData' / 'DedicatedServer' / 'Prospects')
+
+    def test_relative_splits_backslashes(self):
+        self.assertEqual(relative('root', r'data\Saved\Logs\Icarus.log'), Path('root', 'data', 'Saved', 'Logs', 'Icarus.log'))
 
 
 class HelperTests(unittest.IsolatedAsyncioTestCase):
