@@ -4,15 +4,14 @@ import sys
 import tempfile
 import time
 import unittest
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from Compabot import create_bot
-from bot.games import GAMES, ICARUS, relative
+from bot.games import GAMES, ICARUS, VALHEIM, relative
 from bot.icarus.mod_update import ModError
-from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, install_server_commands, players_online, read_config, run_process
+from bot.icarus.server_control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, install_server_commands, players_online, read_config, run_process, valheim_players_online
 from bot.icarus.steam_query import Info
 from tests.test_ore_deposits import WORLD, save
 
@@ -25,6 +24,14 @@ PLAYING = ('[1]LogNet: NotifyAcceptingConnection accepted from: 1:17777\n'
            '[2]LogNet: Join succeeded: Legiterately\n')
 LEFT = ('[3]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 1:17777, Name: SteamNetConnection_1, Driver: x\n'
         '[4]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 2:17777, Name: SteamNetConnection_2, Driver: x\n')
+# Trimmed from a real valheim_server.log: Shelob joins and leaves, then Bjorn joins.
+VALHEIM_LOG = ('10/17/2026 12:00:00: Game server connected\n'
+               '10/17/2026 12:28:09: Got connection SteamID 76561198039777309\n'
+               '10/17/2026 12:28:09: Got handshake from client 76561198039777309\n'
+               '10/17/2026 12:28:30: Got character ZDOID from Shelob : 760666702:1\n'
+               '10/17/2026 12:28:56: Closing socket 76561198039777309\n'
+               '10/17/2026 13:31:02: Got connection SteamID 76561197996718084\n'
+               '10/17/2026 13:31:36: Got character ZDOID from Bjorn : 2666027640:1\n')
 SETTINGS = ('[/Script/Icarus.DedicatedServerSettings]\r\nMaxPlayers=2\r\nLoadProspect=\r\nCreateProspect=\r\n'
             'ResumeProspect=False\r\nLastProspectName=ZAWORLDOO\r\nSaveGameOnExit=True\r\n')
 
@@ -595,15 +602,14 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GameOptionTests(unittest.IsolatedAsyncioTestCase):
-    """The game: option on every /server command, with Icarus plus a made-up game that has no extras."""
+    """The game: option on every /server command, with Icarus and Valheim (which has no extras)."""
 
     async def asyncSetUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.runner = FakeRunner()
         self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts('icarus', ICARUS))
-        self.plain = replace(ICARUS, key='plain', name='Plain', features=frozenset(),
-                             scripts={action: f'{action}-plain.ps1' for action in ICARUS.scripts})
-        self.bot.servers['plain'] = ServerControl([ADMIN], self.scripts('plain', self.plain), game=self.plain)
+        self.valheim = ServerControl([ADMIN], self.scripts('valheim', VALHEIM), game=VALHEIM)
+        self.bot.servers['valheim'] = self.valheim
         for control in self.bot.servers.values():
             control.run = self.runner
             control.windows = True
@@ -637,7 +643,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_command_offers_each_game(self):
         for command in self.bot.tree.get_command('server').commands:
             choices = command._params['game'].choices
-            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Plain', 'plain')], command.name)
+            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Valheim', 'valheim')], command.name)
             self.assertFalse(command._params['game'].required)
         self.bot.tree.get_command('server').to_dict(self.bot.tree)
 
@@ -648,13 +654,13 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1', 'Backup-IcarusServer.ps1'] * 2)
 
     async def test_the_chosen_game_runs_its_own_scripts(self):
-        await self.command('stop').callback(self.interaction(), True, 'plain')
-        self.assertEqual(self.ran(), ['stop-plain.ps1'])
+        await self.command('stop').callback(self.interaction(), True, 'valheim')
+        self.assertEqual(self.ran(), ['Stop-ValheimServer.ps1'])
 
     async def test_an_unknown_game_is_refused_before_anything_runs(self):
         interaction = self.interaction()
         await self.command('status').callback(interaction, 'minecraft')
-        self.assertIn('does not run a `minecraft` server. Games: Icarus, Plain.', interaction.response.send_message.call_args.args[0])
+        self.assertIn('does not run a `minecraft` server. Games: Icarus, Valheim.', interaction.response.send_message.call_args.args[0])
         self.assertTrue(interaction.response.send_message.call_args.kwargs['ephemeral'])
         self.assertEqual(self.runner.calls, [])
 
@@ -662,8 +668,8 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         for name, args, what in (('mods', (), 'Mod updates'), ('ores', (None, None, None), 'The ore map'),
                                  ('start', (False, 'ELMUNDOFOO'), 'Picking a world')):
             interaction = self.interaction()
-            await self.command(name).callback(interaction, *args, 'plain')
-            self.assertEqual(interaction.followup.send.call_args.args[0], f'{what} only works for Icarus, not Plain.')
+            await self.command(name).callback(interaction, *args, 'valheim')
+            self.assertEqual(interaction.followup.send.call_args.args[0], f'{what} only works for Icarus, not Valheim.')
         self.assertEqual(self.runner.calls, [])
 
     async def test_world_autocomplete_follows_the_game(self):
@@ -672,13 +678,78 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         (prospects / 'ELMUNDOFOO.json').write_text('{}')
         worlds = self.command('start')._params['world'].autocomplete
         self.assertEqual([c.value for c in await worlds(self.interaction(), '')], ['ELMUNDOFOO'])
-        self.assertEqual(await worlds(self.interaction('plain'), ''), [])
+        self.assertEqual(await worlds(self.interaction('valheim'), ''), [])
 
     async def test_update_skips_mods_for_a_game_without_them(self):
         interaction = self.interaction()
-        await self.command('update').callback(interaction, 'plain')
-        self.assertEqual(self.ran(), ['update-plain.ps1'])
+        await self.command('update').callback(interaction, 'valheim')
+        self.assertEqual(self.ran(), ['Update-ValheimServer.ps1'])
         self.assertNotIn('Mods', interaction.followup.send.call_args.args[0])
+
+    async def test_bot_runs_both_games(self):
+        bot = create_bot()
+        self.assertEqual(list(bot.servers), ['icarus', 'valheim'])
+        self.assertIs(bot.server, bot.servers['icarus'])
+        self.assertEqual(bot.servers['valheim'].scripts_dir, Path(r'C:\ValheimServer\scripts'))
+        await bot.close()
+
+    def valheim_running(self, log_text):
+        started = int(time.time()) - 60
+        self.runner.result = (0, f'{{"running":true,"started":{started}}}')
+        log_file = self.valheim.install_root / 'logs' / 'valheim_server.log'
+        log_file.parent.mkdir(parents=True)
+        log_file.write_text(log_text)
+
+    async def test_valheim_status_reads_its_own_log(self):
+        self.valheim_running(VALHEIM_LOG)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'valheim')
+        status_env = self.runner.calls[0][1]
+        self.assertEqual(status_env, {'ICARUS_ROOT': str(self.valheim.install_root), 'GAME_PROCESS': 'valheim_server%'})
+        text = interaction.followup.send.call_args.args[0]
+        self.assertIn('ready for players on port 2456', text)
+        self.assertIn('Players: 1/10 (Bjorn).', text)
+
+    async def test_valheim_status_while_still_loading(self):
+        self.valheim_running('10/17/2026 11:59:53: Steam game server initialized\n')
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'valheim')
+        self.assertIn('still loading', interaction.followup.send.call_args.args[0])
+
+    async def test_valheim_stop_refusal_names_the_game(self):
+        self.valheim_running(VALHEIM_LOG)
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction, False, 'valheim')
+        self.assertEqual(interaction.followup.send.call_args.args[0],
+                         'Bjorn is online on **Valheim server**, so I did not stop it. '
+                         'Use `/server stop force:True game:valheim` to stop it anyway.')
+        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1'])
+
+    async def test_valheim_backup_refused_while_running(self):
+        self.valheim_running(VALHEIM_LOG)
+        interaction = self.interaction()
+        await self.command('backup').callback(interaction, 'valheim')
+        self.assertIn('`/server stop game:valheim` backs it up', interaction.followup.send.call_args.args[0])
+        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1'])
+
+    async def test_valheim_restart_waits_for_its_ready_line(self):
+        self.valheim_running(VALHEIM_LOG.replace('Got connection', 'x').replace('Got character', 'x'))
+        statuses = iter([True, False, True])
+
+        async def runner(argv, env=None):
+            self.runner.calls.append((argv, env))
+            if Path(argv[-1]).name == 'Get-IcarusStatus.ps1':
+                if next(statuses, True):
+                    return 0, f'{{"running":true,"started":{int(time.time()) - 60}}}'
+                return 0, '{"running":false}'
+            return 0, 'Done.'
+        self.valheim.run = runner
+        self.valheim.wait_ready = lambda: ServerControl.wait_ready(self.valheim, poll=0)
+        interaction = self.interaction()
+        await self.command('restart').callback(interaction, 'valheim')
+        self.assertEqual(interaction.followup.send.call_args.args[0], '**Valheim server** restarted and is ready for players.')
+        self.assertEqual(self.ran(), ['Get-IcarusStatus.ps1', 'Stop-ValheimServer.ps1', 'Get-IcarusStatus.ps1',
+                                      'Start-ValheimServer.ps1', 'Get-IcarusStatus.ps1'])
 
 
 class ProfileTests(unittest.TestCase):
@@ -693,6 +764,21 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(control.prospects_dir,
                          control.install_root / 'data' / 'Saved' / 'PlayerData' / 'DedicatedServer' / 'Prospects')
 
+    def test_valheim_profile_defaults_and_config(self):
+        control = ServerControl([], Path(tempfile.gettempdir()) / 'no-such-scripts', game=VALHEIM)
+        self.assertEqual((control.name, control.port, control.query_port, control.max_players),
+                         ('Valheim server', '2456', 2457, 10))
+        self.assertIsNone(control.crashes_dir)
+        self.assertIsNone(control.mods)
+        self.assertEqual(control.slash('start'), '`/server start game:valheim`')
+        with tempfile.TemporaryDirectory() as folder:
+            # The real config.psd1 on the server PC, with the password left out.
+            (Path(folder) / 'config.psd1').write_text(
+                "@{\n    InstallRoot = 'C:\\ValheimServer'\n    ServerName = 'CompaValheim'\n    WorldName = 'MiddleEarf'\n"
+                "    GamePort = 2456\n    Public = $false\n    BackupRetentionDays = 14\n}\n")
+            control = ServerControl([], folder, game=VALHEIM)
+        self.assertEqual((str(control.install_root), control.name, control.port), ('C:\\ValheimServer', 'CompaValheim', '2456'))
+
     def test_relative_splits_backslashes(self):
         self.assertEqual(relative('root', r'data\Saved\Logs\Icarus.log'), Path('root', 'data', 'Saved', 'Logs', 'Icarus.log'))
 
@@ -705,6 +791,14 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
                    '[1]LogNet: Login request: ?Name=stranger userId: Steam:UNKNOWN\n'
                    '[1]LogNet: UNetConnection::Close: [UNetConnection] RemoteAddr: 3:17777, Name: SteamNetConnection_3\n')
         self.assertEqual(players_online(PLAYING + refused), ['Legiterately', 'nscript'])
+
+    def test_valheim_players_online(self):
+        self.assertEqual(valheim_players_online(VALHEIM_LOG), {'76561197996718084': 'Bjorn'})
+        died = '10/17/2026 13:40:00: Got character ZDOID from Bjorn : 0:0\n'
+        joining = '10/17/2026 13:41:00: Got connection SteamID 76561198039777309\n'
+        self.assertEqual(valheim_players_online(VALHEIM_LOG + died + joining),
+                         {'76561197996718084': 'Bjorn', '76561198039777309': None})
+        self.assertEqual(valheim_players_online(VALHEIM_LOG + '10/17/2026 13:39:47: Closing socket 76561197996718084\n'), {})
 
     def test_config_defaults(self):
         self.assertEqual(read_config('/missing/config.psd1'), {})

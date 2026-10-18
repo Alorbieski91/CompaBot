@@ -2,8 +2,9 @@ import datetime
 import unittest
 from zoneinfo import ZoneInfo
 
+from bot.games import ICARUS
 from bot.icarus.active_hours import ActiveHours, clock_time, parse_time
-from bot.icarus.server_control import ServerError
+from bot.icarus.server_control import ServerControl, ServerError
 from bot.icarus.steam_query import Info
 
 CHICAGO = ZoneInfo('America/Chicago')
@@ -14,6 +15,9 @@ def at(*args):
 
 
 class FakeControl:
+    game = ICARUS
+    slash = ServerControl.slash
+
     def __init__(self, running=False, players=0):
         self.name = 'CompaWorld'
         self.running = running
