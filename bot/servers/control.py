@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ..games import DEFAULT_GAME, ICARUS
 from .profile import ModError, ServerError, relative
-from .steam_query import query_info
+from .steam_query import Info, query_info
 
 log = logging.getLogger('compabot.server')
 
@@ -60,14 +60,14 @@ class ServerControl:
         self.game = game
         self.admins = frozenset(admins)
         self.scripts_dir = Path(scripts_dir or game.scripts_dir)
-        config = read_config(self.scripts_dir / 'config.psd1')
+        config = self.config = read_config(self.scripts_dir / 'config.psd1')
         self.install_root = Path(config.get('InstallRoot') or self.scripts_dir.parent)
         self.name = config.get('ServerName', game.server_name)
         self.port = config.get('GamePort', game.game_port)
         self.query_port = int(config.get('QueryPort', game.query_port))
         self.max_players = int(config.get('MaxPlayers', game.max_players))
         self.run = run
-        self.query = query_info
+        self.query = (lambda port: game.ask(self)) if game.ask else query_info
         self.windows = os.name == 'nt'
         self.busy = None
         self.holder = None  # the task running a restart, which may run its own stop and start
@@ -205,7 +205,7 @@ class ServerControl:
         except (IndexError, ValueError):
             raise ServerError(f'Status check returned something unexpected:\n{tail(out)}') from None
         if state['running']:
-            state['ready'] = self.listening(state['started'])
+            state['ready'] = await asyncio.to_thread(self.listening, state['started'])
             state['players'] = await self.players(state['started'])
         backups = list((self.install_root / 'backups').glob(self.game.backup_glob))
         state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
@@ -236,6 +236,8 @@ class ServerControl:
 
     def current_log(self, started):
         """The server log text, or '' if it is missing or left over from an earlier run."""
+        if not self.game.log_file:
+            return ''
         log_file = relative(self.install_root, self.game.log_file)
         try:
             if log_file.stat().st_mtime < started:
@@ -245,14 +247,21 @@ class ServerControl:
             return ''
 
     async def players(self, started):
-        """Who is on: the count from the Steam query port, else the names from the server log."""
+        """Who is on: the count from the Steam query port (or the game's own API), else the names from the server log."""
         info = await asyncio.to_thread(self.query, self.query_port)
         if info:
             return info
+        if not self.game.log_players:
+            return Info(0, self.max_players)
         return self.game.log_players(self.current_log(started), self.max_players)
 
     def listening(self, started):
-        """Whether the current server log says the game port is accepting players."""
+        """Whether the current server log says the game port is accepting players.
+
+        A game without a ready line is ready once its own API answers.
+        """
+        if self.game.ready_line is None:
+            return self.query(self.query_port) is not None
         return self.game.ready_line.format(port=self.port) in self.current_log(started)
 
     @property
@@ -307,8 +316,9 @@ async def launch(control, window):
             return (f'It is running but still not ready for players after {READY_TIMEOUT // 60} minutes. '
                     f"Check {control.slash('status')}; if it stays this way, try {control.slash('restart')}."), attempt > 1
         log.warning('The server closed while loading (start %s of 2)', attempt)
+    where = f'`{control.game.log_file}`' if control.game.log_file else 'the server window'
     return ('It closed while loading, twice, without a crash report. '
-            f"Check `{control.game.log_file}` on the PC, then try {control.slash('start')}."), True
+            f"Check {where} on the PC, then try {control.slash('start')}."), True
 
 
 def online(players):

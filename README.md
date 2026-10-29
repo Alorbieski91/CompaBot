@@ -66,9 +66,9 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 `C:\IcarusServer\scripts`, set `ICARUS_SCRIPTS_DIR`.
 
 Every `/server` command takes an optional `game:` option that picks which game server it acts on:
-Icarus or Valheim. Leaving it empty means Icarus. Each game's facts (folders, scripts, process
+Icarus, Valheim or Palworld. Leaving it empty means Icarus. Each game's facts (folders, scripts, process
 name, ports, and which extras it has) are in one profile in that game's folder under `bot/games/`.
-`mods`, `ores` and `start world:` are Icarus extras and are refused for Valheim.
+`mods`, `ores` and `start world:` are Icarus extras and are refused for the other games.
 
 `game:Valheim` runs the scripts in `C:\ValheimServer\scripts` (set `VALHEIM_SCRIPTS_DIR` if they
 are elsewhere) and reads `ServerName` and `GamePort` from their `config.psd1`. `status`, `start`,
@@ -79,6 +79,17 @@ refresh. Down and crash alerts and automatic updates (below) look after Valheim 
 scheduled start and stop (turned off for Valheim until you set `VALHEIM_ACTIVE_HOURS=on`). Automatic
 backups cover Valheim too, zipping `data` into `backups\Valheim-*.zip` whenever its world in
 `data\worlds_local` has changed while the server is off.
+
+`game:Palworld` runs the scripts in `C:\PalworldServer\scripts` (set `PALWORLD_SCRIPTS_DIR` if they
+are elsewhere) and reads `ServerName`, `GamePort`, `MaxPlayers`, `RestApiPort` and `AdminPassword`
+from their `config.psd1`. Palworld writes no log file, so Compabot asks its REST API on this PC
+(`http://127.0.0.1:8212/v1/api/players`, signed in as `admin` with `AdminPassword`) instead: the
+server counts as ready once the API answers, and the API's player list gives the count and names.
+The start script turns the API on, and the stop script uses it to save and shut down. Alerts,
+automatic updates and automatic backups (zipping `server\Pal\Saved\SaveGames` and `Config` into
+`backups\Palworld-*.zip`) cover Palworld too, and the scheduled start and stop is off for it until
+you set `PALWORLD_ACTIVE_HOURS=on`. Crash reports are read from `server\Pal\Saved\Crashes`.
+Compabot can't tell a frozen Palworld server from one that is still loading, so a hang is not alerted.
 
 | Command | Behavior |
 | --- | --- |
@@ -238,9 +249,9 @@ daylight saving time. Run `pip install -r requirements.txt` again after updating
 needs the `tzdata` package for time zones. Without it Compabot runs with the schedule off and says so in `logs\compabot.log`.
 
 Every game shares these times, and each game can be taken off the schedule on its own:
-`ICARUS_ACTIVE_HOURS` and `VALHEIM_ACTIVE_HOURS` in `.env` take `on` or `off`. Left blank, Icarus
-is on and Valheim is off, so Valheim is only started and stopped by hand until you set
-`VALHEIM_ACTIVE_HOURS=on` and restart Compabot. A game is also skipped if its scripts folder is
+`ICARUS_ACTIVE_HOURS`, `VALHEIM_ACTIVE_HOURS` and `PALWORLD_ACTIVE_HOURS` in `.env` take `on` or
+`off`. Left blank, Icarus is on and Valheim and Palworld are off, so they are only started and
+stopped by hand until you set `VALHEIM_ACTIVE_HOURS=on` or `PALWORLD_ACTIVE_HOURS=on` and restart Compabot. A game is also skipped if its scripts folder is
 not on the PC. Each game is checked separately, so with both on, both are started at 6:00 AM and
 each is stopped at 8:00 PM only if nobody is on that game. Each post names its game, for example
 `**CompaWorld** (Icarus) was shut down at 8:00 PM because nobody was online.`
