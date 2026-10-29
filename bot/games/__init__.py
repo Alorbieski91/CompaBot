@@ -6,7 +6,8 @@ bot/servers.
 """
 from ..servers.profile import GameProfile, relative  # noqa: F401 (kept importable from here)
 from .icarus import ICARUS
+from .palworld import PALWORLD
 from .valheim import VALHEIM
 
-GAMES = {game.key: game for game in (ICARUS, VALHEIM)}
+GAMES = {game.key: game for game in (ICARUS, VALHEIM, PALWORLD)}
 DEFAULT_GAME = ICARUS.key

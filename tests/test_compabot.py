@@ -87,16 +87,18 @@ class AlertTests(unittest.TestCase):
     def test_each_installed_game_is_watched(self):
         with tempfile.TemporaryDirectory() as folder:
             icarus, valheim = Path(folder) / 'icarus', Path(folder) / 'valheim'
+            # A Palworld folder that doesn't exist, so the real C:\\PalworldServer is never picked up.
+            palworld = Path(folder) / 'no-palworld'
             icarus.mkdir()
             for valheim_installed, watched in ((False, ['icarus']), (True, ['icarus', 'valheim'])):
                 if valheim_installed:
                     valheim.mkdir()
-                bot = create_bot(scripts_dir=icarus, alert_channel_id=5, valheim_scripts_dir=valheim)
+                bot = create_bot(scripts_dir=icarus, alert_channel_id=5, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld)
                 with patch('Compabot.install_monitor') as install:
                     bot.install_alerts()
                 self.assertEqual([call.args[1].game.key for call in install.call_args_list], watched)
                 self.assertTrue(all(call.args[2] == 5 for call in install.call_args_list))
-            bot = create_bot(scripts_dir=icarus, valheim_scripts_dir=valheim)
+            bot = create_bot(scripts_dir=icarus, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld)
             with patch('Compabot.install_monitor') as install:
                 bot.install_alerts()
             install.assert_not_called()
@@ -104,34 +106,38 @@ class AlertTests(unittest.TestCase):
     def test_each_installed_game_is_kept_up_to_date(self):
         with tempfile.TemporaryDirectory() as folder:
             icarus, valheim = Path(folder) / 'icarus', Path(folder) / 'valheim'
+            # A Palworld folder that doesn't exist, so the real C:\\PalworldServer is never picked up.
+            palworld = Path(folder) / 'no-palworld'
             icarus.mkdir()
-            bot = create_bot(scripts_dir=icarus, update_hours=2, valheim_scripts_dir=valheim)
+            bot = create_bot(scripts_dir=icarus, update_hours=2, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld)
             self.assertEqual([u.control.game.key for u in bot.install_updates()], ['icarus'])
             valheim.mkdir()
             updaters = bot.install_updates()
             self.assertEqual([u.control.game.key for u in updaters], ['icarus', 'valheim'])
             self.assertEqual([u.state_file.name for u in updaters], ['auto_update.json', 'auto_update_valheim.json'])
             self.assertEqual(updaters[1].every, 2 * 60 * 60)
-            self.assertEqual(create_bot(scripts_dir=icarus, update_hours=0, valheim_scripts_dir=valheim).install_updates(), [])
+            self.assertEqual(create_bot(scripts_dir=icarus, update_hours=0, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld).install_updates(), [])
 
     def test_active_hours_cover_the_games_turned_on(self):
         hours = (datetime.time(6), datetime.time(20), ZoneInfo('UTC'))
         with tempfile.TemporaryDirectory() as folder:
             icarus, valheim = Path(folder) / 'icarus', Path(folder) / 'valheim'
+            # A Palworld folder that doesn't exist, so the real C:\\PalworldServer is never picked up.
+            palworld = Path(folder) / 'no-palworld'
             icarus.mkdir()
             valheim.mkdir()
             # By default only Icarus runs on the schedule; Valheim is off until VALHEIM_ACTIVE_HOURS=on.
-            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim)
+            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld)
             self.assertEqual([s.control.game.key for s in bot.install_schedules()], ['icarus'])
-            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim,
+            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld,
                              scheduled_games={'icarus', 'valheim'})
             schedules = bot.install_schedules()
             self.assertEqual([s.control.game.key for s in schedules], ['icarus', 'valheim'])
             self.assertTrue(all(s.events == {'stop': datetime.time(20), 'start': datetime.time(6)} for s in schedules))
-            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim, scheduled_games={'valheim'})
+            bot = create_bot(scripts_dir=icarus, active_hours=hours, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld, scheduled_games={'valheim'})
             self.assertEqual([s.control.game.key for s in bot.install_schedules()], ['valheim'])
             off = (None, None, ZoneInfo('UTC'))
-            self.assertEqual(create_bot(scripts_dir=icarus, active_hours=off, valheim_scripts_dir=valheim).install_schedules(), [])
+            self.assertEqual(create_bot(scripts_dir=icarus, active_hours=off, valheim_scripts_dir=valheim, palworld_scripts_dir=palworld).install_schedules(), [])
 
 
 if __name__ == '__main__':

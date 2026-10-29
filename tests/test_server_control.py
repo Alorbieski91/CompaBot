@@ -6,12 +6,13 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from Compabot import create_bot
-from bot.games import GAMES, ICARUS, VALHEIM, relative
+from bot.games import GAMES, ICARUS, PALWORLD, VALHEIM, relative
 from bot.games.icarus.mods import ModError
 from bot.games.icarus.players import players_online
+from bot.games.palworld import api as palworld_api
 from bot.games.valheim.players import valheim_players_online
 from bot.servers.commands import install_server_commands
 from bot.servers.control import MAX_CHOICES, SCRIPTS, ServerControl, ServerError, read_config, run_process
@@ -63,8 +64,9 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         (self.scripts / 'config.psd1').write_text(
             f"@{{\n    InstallRoot = '{root}'\n    ServerName = 'CompaWorld'\n    GamePort = 17777\n}}\n")
         self.runner = FakeRunner()
-        # A Valheim folder that doesn't exist, so the jobs never touch a real C:\\ValheimServer.
-        self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts, valheim_scripts_dir=root / 'no-valheim')
+        # Valheim and Palworld folders that don't exist, so the jobs never touch the real servers.
+        self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts, valheim_scripts_dir=root / 'no-valheim',
+                              palworld_scripts_dir=root / 'no-palworld')
         self.bot.server.run = self.runner
         self.bot.server.windows = True
         self.bot.server.query = lambda port: None
@@ -637,7 +639,7 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GameOptionTests(unittest.IsolatedAsyncioTestCase):
-    """The game: option on every /server command, with Icarus and Valheim (which has no extras)."""
+    """The game: option on every /server command, with Icarus, and Valheim and Palworld (which have no extras)."""
 
     async def asyncSetUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -645,6 +647,8 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts('icarus', ICARUS))
         self.valheim = ServerControl([ADMIN], self.scripts('valheim', VALHEIM), game=VALHEIM)
         self.bot.servers['valheim'] = self.valheim
+        self.palworld = ServerControl([ADMIN], self.scripts('palworld', PALWORLD), game=PALWORLD)
+        self.bot.servers['palworld'] = self.palworld
         for control in self.bot.servers.values():
             control.run = self.runner
             control.windows = True
@@ -678,7 +682,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_command_offers_each_game(self):
         for command in self.bot.tree.get_command('server').commands:
             choices = command._params['game'].choices
-            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Valheim', 'valheim')], command.name)
+            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Valheim', 'valheim'), ('Palworld', 'palworld')], command.name)
             self.assertFalse(command._params['game'].required)
         self.bot.tree.get_command('server').to_dict(self.bot.tree)
 
@@ -695,7 +699,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_unknown_game_is_refused_before_anything_runs(self):
         interaction = self.interaction()
         await self.command('status').callback(interaction, 'minecraft')
-        self.assertIn('does not run a `minecraft` server. Games: Icarus, Valheim.', interaction.response.send_message.call_args.args[0])
+        self.assertIn('does not run a `minecraft` server. Games: Icarus, Valheim, Palworld.', interaction.response.send_message.call_args.args[0])
         self.assertTrue(interaction.response.send_message.call_args.kwargs['ephemeral'])
         self.assertEqual(self.runner.calls, [])
 
@@ -721,12 +725,50 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ran(), ['Update-ValheimServer.ps1'])
         self.assertNotIn('Mods', interaction.followup.send.call_args.args[0])
 
-    async def test_bot_runs_both_games(self):
+    async def test_bot_runs_every_game(self):
         bot = create_bot()
-        self.assertEqual(list(bot.servers), ['icarus', 'valheim'])
+        self.assertEqual(list(bot.servers), ['icarus', 'valheim', 'palworld'])
         self.assertIs(bot.server, bot.servers['icarus'])
         self.assertEqual(bot.servers['valheim'].scripts_dir, Path(r'C:\ValheimServer\scripts'))
+        self.assertEqual(bot.servers['palworld'].scripts_dir, Path(r'C:\PalworldServer\scripts'))
         await bot.close()
+
+    def palworld_running(self, info):
+        self.runner.result = (0, f'{{"running":true,"started":{int(time.time()) - 60}}}')
+        self.palworld.query = lambda port: info
+
+    async def test_palworld_status_asks_its_rest_api(self):
+        self.palworld_running(Info(1, 4, ('Shelob',)))
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'palworld')
+        self.assertEqual(self.runner.calls[0][1], {'GAME_ROOT': str(self.palworld.install_root), 'GAME_PROCESS': 'PalServer%'})
+        text = interaction.followup.send.call_args.args[0]
+        self.assertIn('ready for players on port 8211', text)
+        self.assertIn('Players: 1/4 (Shelob).', text)
+
+    async def test_palworld_is_loading_until_its_api_answers(self):
+        self.palworld_running(None)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'palworld')
+        text = interaction.followup.send.call_args.args[0]
+        self.assertIn('still loading', text)
+        self.assertIn('Players: 0/4.', text)
+
+    async def test_palworld_stop_refused_with_players_on(self):
+        self.palworld_running(Info(2, 4, ('Bjorn', 'Shelob')))
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction, False, 'palworld')
+        self.assertEqual(interaction.followup.send.call_args.args[0],
+                         'Bjorn and Shelob are online on **Palworld server**, so I did not stop it. '
+                         'Use `/server stop force:True game:palworld` to stop it anyway.')
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1'])
+
+    async def test_palworld_runs_its_own_scripts(self):
+        self.runner.result = (0, '{"running":false}')
+        for name, args in (('backup', ()), ('update', ()), ('stop', (True,))):
+            await self.command(name).callback(self.interaction(), *args, 'palworld')
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1', 'Backup-PalworldServer.ps1', 'Update-PalworldServer.ps1',
+                                      'Stop-PalworldServer.ps1'])
 
     def valheim_running(self, log_text):
         started = int(time.time()) - 60
@@ -815,6 +857,26 @@ class ProfileTests(unittest.TestCase):
             control = ServerControl([], folder, game=VALHEIM)
         self.assertEqual((str(control.install_root), control.name, control.port), ('C:\\ValheimServer', 'CompaValheim', '2456'))
 
+    def test_palworld_profile_defaults_and_config(self):
+        control = ServerControl([], Path(tempfile.gettempdir()) / 'no-such-scripts', game=PALWORLD)
+        self.assertEqual((control.name, control.port, control.query_port, control.max_players),
+                         ('Palworld server', '8211', 27016, 4))
+        self.assertEqual(control.crashes_dir, control.install_root / 'server' / 'Pal' / 'Saved' / 'Crashes')
+        self.assertEqual(control.current_log(0), '')
+        self.assertIsNone(control.mods)
+        self.assertIsNone(control.worlds)
+        with tempfile.TemporaryDirectory() as folder:
+            # The real config.psd1 on the server PC, with made-up passwords.
+            (Path(folder) / 'config.psd1').write_text(
+                "@{\n    InstallRoot = 'C:\\PalworldServer'\n    ServerName = 'CompaPalworld'\n"
+                "    Password = 'joinme'\n    AdminPassword = 'admin-secret'\n"
+                "    GamePort = 8211        # UDP, forward this on the router\n    QueryPort = 27016\n"
+                "    RestApiPort = 8212     # TCP, local only\n    MaxPlayers = 4\n}\n")
+            control = ServerControl([], folder, game=PALWORLD)
+        self.assertEqual((str(control.install_root), control.name, control.port, control.query_port),
+                         ('C:\\PalworldServer', 'CompaPalworld', '8211', 27016))
+        self.assertEqual((control.config['AdminPassword'], control.config['RestApiPort']), ('admin-secret', '8212'))
+
     def test_relative_splits_backslashes(self):
         self.assertEqual(relative('root', r'data\Saved\Logs\Icarus.log'), Path('root', 'data', 'Saved', 'Logs', 'Icarus.log'))
 
@@ -835,6 +897,37 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(valheim_players_online(VALHEIM_LOG + died + joining),
                          {'76561197996718084': 'Bjorn', '76561198039777309': None})
         self.assertEqual(valheim_players_online(VALHEIM_LOG + '10/17/2026 13:39:47: Closing socket 76561197996718084\n'), {})
+
+    def test_palworld_players_from_the_rest_api(self):
+        control = SimpleNamespace(max_players=4)
+        answer = {'players': [{'name': 'Shelob', 'level': 12}, {'name': 'Bjorn', 'level': 3}]}
+        self.assertEqual(palworld_api.ask(control, lambda c, path: answer), Info(2, 4, ('Bjorn', 'Shelob')))
+        self.assertEqual(palworld_api.ask(control, lambda c, path: {'players': []}), Info(0, 4))
+        # A player whose name hasn't loaded yet still counts, but then no names are listed.
+        self.assertEqual(palworld_api.ask(control, lambda c, path: {'players': [{'name': ''}, {'name': 'Bjorn'}]}), Info(2, 4))
+
+        def refused(c, path):
+            raise ConnectionRefusedError
+        self.assertIsNone(palworld_api.ask(control, refused))
+        self.assertIsNone(palworld_api.ask(control, lambda c, path: {'error': 'Unauthorized'}))
+
+    def test_palworld_rest_request_signs_in_as_admin(self):
+        control = SimpleNamespace(config={'AdminPassword': 'admin-secret', 'RestApiPort': '8212'})
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, *args):
+                return b'{"players": []}'
+        with patch('bot.games.palworld.api.urllib.request.urlopen', return_value=Response()) as urlopen:
+            self.assertEqual(palworld_api.request(control, 'players'), {'players': []})
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.full_url, 'http://127.0.0.1:8212/v1/api/players')
+        self.assertEqual(req.get_header('Authorization'), 'Basic YWRtaW46YWRtaW4tc2VjcmV0')  # admin:admin-secret
 
     def test_config_defaults(self):
         self.assertEqual(read_config('/missing/config.psd1'), {})

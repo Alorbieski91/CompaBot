@@ -10,7 +10,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from bot.features import install_features
-from bot.games import GAMES, ICARUS, VALHEIM
+from bot.games import GAMES, ICARUS, PALWORLD, VALHEIM
 from bot.servers.active_hours import ActiveHours, parse_time
 from bot.servers.auto_update import AutoUpdater
 from bot.servers.commands import install_server_commands
@@ -24,7 +24,7 @@ log = logging.getLogger('compabot')
 class CompaBot(commands.Bot):
     def __init__(self, guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR,
                  update_hours=0, update_channel_id=None, alert_channel_id=None, active_hours=None,
-                 valheim_scripts_dir=None, scheduled_games=None):
+                 valheim_scripts_dir=None, scheduled_games=None, palworld_scripts_dir=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
@@ -39,7 +39,8 @@ class CompaBot(commands.Bot):
         # the schedule and auto-backups) cover every game installed on this PC.
         self.server = ServerControl(server_admins, scripts_dir, game=ICARUS)
         self.servers = {ICARUS.key: self.server,
-                        VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM)}
+                        VALHEIM.key: ServerControl(server_admins, valheim_scripts_dir, game=VALHEIM),
+                        PALWORLD.key: ServerControl(server_admins, palworld_scripts_dir, game=PALWORLD)}
         self.update_channel_id = update_channel_id
         self.update_hours = update_hours
         self.updaters = {}  # game key -> AutoUpdater, filled in by install_updates
@@ -47,7 +48,7 @@ class CompaBot(commands.Bot):
         self.alert_channel_id = alert_channel_id
         # active_hours is (start time, stop time, zone), shared by every game; either time may be
         # None to turn it off. scheduled_games is the game keys it runs for; None means each
-        # profile's own default (Icarus on, Valheim off).
+        # profile's own default (Icarus on, Valheim and Palworld off).
         self.active_hours = active_hours or (None, None, None)
         self.scheduled_games = (set(scheduled_games) if scheduled_games is not None
                                 else {key for key, control in self.servers.items() if control.game.active_hours})
@@ -204,9 +205,10 @@ class CompaBot(commands.Bot):
 
 
 def create_bot(guild_id=None, server_admins=(), scripts_dir=DEFAULT_SCRIPTS_DIR, update_hours=0, update_channel_id=None,
-               alert_channel_id=None, active_hours=None, valheim_scripts_dir=None, scheduled_games=None):
+               alert_channel_id=None, active_hours=None, valheim_scripts_dir=None, scheduled_games=None,
+               palworld_scripts_dir=None):
     bot = CompaBot(guild_id, server_admins, scripts_dir, update_hours, update_channel_id, alert_channel_id, active_hours,
-                   valheim_scripts_dir, scheduled_games)
+                   valheim_scripts_dir, scheduled_games, palworld_scripts_dir)
 
     @bot.hybrid_command(description='Have Compabot repeat a message (Manage Messages required).')
     @commands.guild_only()
@@ -237,6 +239,7 @@ if __name__ == '__main__':
         raise SystemExit('ALERT_CHANNEL_ID must be a numeric Discord channel ID, or blank.')
     scripts_dir = os.getenv('ICARUS_SCRIPTS_DIR', '').strip() or DEFAULT_SCRIPTS_DIR
     valheim_scripts_dir = os.getenv('VALHEIM_SCRIPTS_DIR', '').strip() or None
+    palworld_scripts_dir = os.getenv('PALWORLD_SCRIPTS_DIR', '').strip() or None
     raw_hours = os.getenv('AUTO_UPDATE_HOURS', '').strip() or '2'
     try:
         update_hours = float(raw_hours)
@@ -253,7 +256,7 @@ if __name__ == '__main__':
             raise SystemExit(f'{key} must be a 24-hour time like {default}, or off.') from None
     scheduled_games = set()
     for game in GAMES.values():
-        # ICARUS_ACTIVE_HOURS, VALHEIM_ACTIVE_HOURS: on or off; blank keeps the game's default.
+        # ICARUS_ACTIVE_HOURS, VALHEIM_ACTIVE_HOURS, PALWORLD_ACTIVE_HOURS: on or off; blank keeps the game's default.
         key = f'{game.key.upper()}_ACTIVE_HOURS'
         switch = os.getenv(key, '').strip().lower() or ('on' if game.active_hours else 'off')
         if switch not in ('on', 'off'):
@@ -272,4 +275,4 @@ if __name__ == '__main__':
                update_hours, int(raw_channel) if raw_channel else None,
                int(raw_alerts) if raw_alerts else None,
                (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone), valheim_scripts_dir,
-               scheduled_games).run(token)
+               scheduled_games, palworld_scripts_dir).run(token)

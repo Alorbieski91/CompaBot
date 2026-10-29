@@ -90,7 +90,7 @@ class ServerMonitor:
         if not status['running']:
             return 'down', None
         self.started = status['started']
-        if not self.control.listening(status['started']):
+        if not await asyncio.to_thread(self.control.listening, status['started']):
             return 'starting', None
         # The log says it is ready. If the query port has never answered, it may simply not
         # answer queries, so trust the log; otherwise the server stopped answering.
