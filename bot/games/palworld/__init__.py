@@ -1,6 +1,7 @@
-"""Palworld: its profile. Palworld has no extras of its own yet, only the shared /server commands."""
+"""Palworld: its profile. Its one extra is /server settings, which changes PalWorldSettings.ini."""
 from ...servers.profile import GameProfile
 from .api import ask
+from .settings import PalworldSettings
 
 PALWORLD = GameProfile(
     key='palworld',
@@ -26,5 +27,7 @@ PALWORLD = GameProfile(
     ready_line=None,
     log_players=None,
     ask=ask,
+    features=frozenset({'settings'}),
+    settings=PalworldSettings,
     active_hours=False,  # PALWORLD_ACTIVE_HOURS=on puts it on the shared schedule
 )

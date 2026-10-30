@@ -76,6 +76,7 @@ class ServerControl:
         # The game's extras, from its folder in bot/games; None when it has none.
         self.mods = game.mods(self.install_root) if game.supports('mods') else None
         self.worlds = game.worlds(self) if game.supports('worlds') else None
+        self.settings = game.settings(self) if game.supports('settings') else None
 
     def slash(self, command):
         """A /server command to suggest in a reply, with game: added for any game but the default."""
@@ -95,6 +96,8 @@ class ServerControl:
             if (await self.status())['running']:
                 raise ServerError(RUNNING_BACKUP.format(name=f'**{self.name}**', stop=self.slash('stop')))
             self.check_free()  # another action may have started during the status check
+        if action == 'start' and self.settings:
+            await self.write_pending_settings()
         self.busy = action
         if action == 'stop':
             self.stopped_at = time.time()
@@ -104,6 +107,25 @@ class ServerControl:
             return await asyncio.wait_for(asyncio.shield(task), self.reply_window if window is None else window)
         except asyncio.TimeoutError:
             return None, ''
+
+    async def write_pending_settings(self):
+        """Before a start, write the settings changes that waited for the server to be off."""
+        if not self.settings.pending()['changes']:
+            return
+        try:
+            running = (await self.status())['running']
+        except ServerError as error:
+            log.warning('Could not check the %s server before writing its settings: %s', self.game.name, error)
+            return
+        self.check_free()  # another action may have started during the status check
+        if running:
+            return
+        try:
+            written = await asyncio.to_thread(self.settings.apply_pending)
+            log.info('Wrote the waiting %s settings before starting: %s', self.game.name, written)
+        except (ServerError, OSError) as error:
+            # Start anyway; the changes stay waiting for the next start.
+            log.warning('Could not write the waiting %s settings: %s', self.game.name, error)
 
     def check_free(self):
         """Refuse if another action is running, unless it is a restart and this is that restart's own step."""

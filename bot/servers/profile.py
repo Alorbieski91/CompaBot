@@ -44,7 +44,7 @@ class GameProfile:
     # answer; None if the game has no log to read.
     log_players: Optional[Callable]
     status_script: Path = STATUS_SCRIPT
-    features: frozenset = field(default_factory=frozenset)  # extras: mods, worlds, ores
+    features: frozenset = field(default_factory=frozenset)  # extras: mods, worlds, ores, settings
     # Hooks into the game's own folder for its extras; None when the game has none.
     mods: Optional[Callable] = None  # install root -> mod updater with update() and available()
     worlds: Optional[Callable] = None  # ServerControl -> saved worlds, for /server start world:
@@ -52,6 +52,9 @@ class GameProfile:
     # ServerControl -> Info, or None when nothing answers: the game's own way of asking the
     # running server who is on, used instead of the Steam query port.
     ask: Optional[Callable] = None
+    # ServerControl -> the game's settings file (see bot/servers/settings.py), for /server settings;
+    # None when the game has no settings Compabot can change.
+    settings: Optional[Callable] = None
     # Whether the shared SERVER_START_TIME/SERVER_STOP_TIME schedule runs this game when its
     # <KEY>_ACTIVE_HOURS setting in .env is blank.
     active_hours: bool = True

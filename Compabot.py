@@ -16,6 +16,7 @@ from bot.servers.auto_update import AutoUpdater
 from bot.servers.commands import install_server_commands
 from bot.servers.control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit
 from bot.servers.monitor import install_monitor
+from bot.servers.settings_watch import SettingsWatch
 from bot.storage import Store
 
 BASE = Path(__file__).resolve().parent
@@ -54,6 +55,7 @@ class CompaBot(commands.Bot):
                                 else {key for key, control in self.servers.items() if control.game.active_hours})
         self.schedules = {}  # game key -> ActiveHours, filled in by install_schedules
         self.schedule_tasks = []
+        self.settings_tasks = []
 
     async def setup_hook(self):
         self.store = Store(BASE / 'data' / 'compabot.sqlite3')
@@ -68,6 +70,8 @@ class CompaBot(commands.Bot):
         if self.server.windows:
             for schedule in self.install_schedules():
                 self.schedule_tasks.append(asyncio.create_task(schedule.run()))
+            for watch in self.install_settings_watches():
+                self.settings_tasks.append(asyncio.create_task(watch.run()))
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -108,6 +112,11 @@ class CompaBot(commands.Bot):
                 self.schedules[key] = ActiveHours(control, self.alert, start, stop, zone)
         return list(self.schedules.values())
 
+    def install_settings_watches(self):
+        """A SettingsWatch for each game with /server settings whose scripts are installed on this PC."""
+        return [SettingsWatch(control, self.alert) for control in self.servers.values()
+                if control.settings and control.scripts_dir.is_dir()]
+
     @tasks.loop(minutes=5)
     async def auto_backup(self):
         """Back up each game's world while its server is off, if it changed since its last backup.
@@ -136,7 +145,7 @@ class CompaBot(commands.Bot):
 
     async def close(self):
         self.auto_backup.cancel()
-        for task in (*self.update_tasks, *self.schedule_tasks):
+        for task in (*self.update_tasks, *self.schedule_tasks, *self.settings_tasks):
             if task:
                 task.cancel()
         try:
