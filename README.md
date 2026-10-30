@@ -116,6 +116,36 @@ Only one start, stop, backup, update, or mod update runs at a time. Results are 
 with the script's output. If a script takes longer than 14 minutes, Compabot says it is
 still running and lets it finish; use `/server status` to check on it.
 
+### Palworld settings
+
+`/server settings` changes Palworld's gameplay settings in
+`server\Pal\Saved\Config\WindowsServer\PalWorldSettings.ini` (the `OptionSettings=(...)` line). Its
+`game:` option only offers games with settings, and leaving it empty means Palworld.
+
+| Command | Behavior |
+| --- | --- |
+| `/server settings set setting: value: restart:False` | Change one setting. `setting:` autocompletes with a plain-English label and the current value. `value:` offers True/False or the options, or hints and the allowed range for a number; anything outside the range is refused. |
+| `/server settings show setting:` | One setting's file value, default, range, any waiting change, and what the running server uses. Empty: every setting changed from its default, and what is waiting. |
+| `/server settings pending` | The changes waiting for the next start. |
+| `/server settings cancel setting:` | Drop one waiting change, or all of them. |
+| `/server settings undo` | Put back the settings file from before the last change. Only while the server is off. |
+
+Palworld only reads the file when it starts, and can write its own values back when it shuts down,
+so Compabot only writes the file while the server is off:
+
+- Server off: the file is backed up to `backups\settings\` (the last 30 are kept) and written now.
+- Server on: the change waits in `settings\pending.json`. It is written just before any start through
+  Compabot (commands, the schedule, auto-updates), or within a minute after the server stops some
+  other way. With `restart:True`, Compabot restarts the server to apply it, straight away if nobody
+  is on, otherwise as soon as the last player leaves. It never restarts with players on.
+- Once the server is back up, Compabot checks the REST API (`/v1/api/settings`) and posts the changes
+  now in effect to `ALERT_CHANNEL_ID`, or a warning if the server ignored one.
+
+Every change is logged with who made it in `settings\history.jsonl`. Passwords, ports, the REST API
+and RCON, and what `config.psd1` sets on every start (server name, description, max players) are
+never offered. A `WorldOption.sav` in the world folder would override the file, so changes are
+refused while one exists. The list of settings and their ranges is in `bot/games/palworld/settings.py`.
+
 ### Down and crash alerts
 
 Set `ALERT_CHANNEL_ID` in `.env` to a channel ID (right-click the channel > Copy Channel ID) to

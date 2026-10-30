@@ -681,6 +681,8 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_command_offers_each_game(self):
         for command in self.bot.tree.get_command('server').commands:
+            if command.name == 'settings':  # a group, offering only the games with settings (see test_settings)
+                continue
             choices = command._params['game'].choices
             self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Valheim', 'valheim'), ('Palworld', 'palworld')], command.name)
             self.assertFalse(command._params['game'].required)

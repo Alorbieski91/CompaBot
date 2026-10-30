@@ -1,7 +1,8 @@
 """The /server commands every game has: status, start, stop, restart, backup and update.
 
 A game with commands of its own (Icarus: ores and mods) adds them to the same /server group
-from its folder in bot/games, through its profile's commands hook.
+from its folder in bot/games, through its profile's commands hook. Games with a settings file
+Compabot can change (Palworld) also get /server settings; see settings_commands.py.
 """
 import time
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import discord
 from discord import app_commands
 
 from ..games import DEFAULT_GAME
+from . import settings_commands
 from .control import LABELS, MAX_CHOICES, ServerControl, ServerError, describe, fit, report
 
 
@@ -172,5 +174,7 @@ def install_server_commands(bot, controls):
     hooks = dict.fromkeys(control.game.commands for control in controls.values() if control.game.commands)
     for add_commands in hooks:
         add_commands(server, shared)
+    # /server settings, for the games that have settings Compabot can change.
+    settings_commands.install(server, shared, controls)
 
     bot.tree.add_command(server)
