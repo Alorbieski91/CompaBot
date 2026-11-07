@@ -5,9 +5,10 @@ anything only that game has, such as its own /server commands. Code every game s
 bot/servers.
 """
 from ..servers.profile import GameProfile, relative  # noqa: F401 (kept importable from here)
+from .enshrouded import ENSHROUDED
 from .icarus import ICARUS
 from .palworld import PALWORLD
 from .valheim import VALHEIM
 
-GAMES = {game.key: game for game in (ICARUS, VALHEIM, PALWORLD)}
+GAMES = {game.key: game for game in (ICARUS, VALHEIM, PALWORLD, ENSHROUDED)}
 DEFAULT_GAME = ICARUS.key

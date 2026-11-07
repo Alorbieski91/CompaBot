@@ -66,7 +66,7 @@ user > Copy User ID). Everyone else is refused. If the scripts are not in
 `C:\IcarusServer\scripts`, set `ICARUS_SCRIPTS_DIR`.
 
 Every `/server` command takes an optional `game:` option that picks which game server it acts on:
-Icarus, Valheim or Palworld. Leaving it empty means Icarus. Each game's facts (folders, scripts, process
+Icarus, Valheim, Palworld or Enshrouded. Leaving it empty means Icarus. Each game's facts (folders, scripts, process
 name, ports, and which extras it has) are in one profile in that game's folder under `bot/games/`.
 `mods`, `ores` and `start world:` are Icarus extras and are refused for the other games.
 
@@ -90,6 +90,17 @@ automatic updates and automatic backups (zipping `server\Pal\Saved\SaveGames` an
 `backups\Palworld-*.zip`) cover Palworld too, and the scheduled start and stop is off for it until
 you set `PALWORLD_ACTIVE_HOURS=on`. Crash reports are read from `server\Pal\Saved\Crashes`.
 Compabot can't tell a frozen Palworld server from one that is still loading, so a hang is not alerted.
+
+`game:Enshrouded` runs the scripts in `C:\EnshroudedServer\scripts` (set `ENSHROUDED_SCRIPTS_DIR` if
+they are elsewhere) and reads `ServerName`, `QueryPort` and `MaxPlayers` from their `config.psd1`.
+Enshrouded uses one UDP port, 15637, for joining and the server list, so that is the port
+`/server status` shows and the one players are counted on (or, if it doesn't answer, from who
+`server\logs\enshrouded_server.log` says has logged in). The server counts as ready once its log
+says `[Session] 'HostOnline' (up)!`, and the stop script saves it with Ctrl+C. Alerts, automatic
+updates and automatic backups (zipping `server\savegame` and `enshrouded_server.json` into
+`backups\Enshrouded-*.zip`) cover Enshrouded too, and the scheduled start and stop is off for it
+until you set `ENSHROUDED_ACTIVE_HOURS=on`. Enshrouded writes no crash reports, so a crash is posted
+as the server going down.
 
 | Command | Behavior |
 | --- | --- |
@@ -279,9 +290,9 @@ daylight saving time. Run `pip install -r requirements.txt` again after updating
 needs the `tzdata` package for time zones. Without it Compabot runs with the schedule off and says so in `logs\compabot.log`.
 
 Every game shares these times, and each game can be taken off the schedule on its own:
-`ICARUS_ACTIVE_HOURS`, `VALHEIM_ACTIVE_HOURS` and `PALWORLD_ACTIVE_HOURS` in `.env` take `on` or
-`off`. Left blank, Icarus is on and Valheim and Palworld are off, so they are only started and
-stopped by hand until you set `VALHEIM_ACTIVE_HOURS=on` or `PALWORLD_ACTIVE_HOURS=on` and restart Compabot. A game is also skipped if its scripts folder is
+`ICARUS_ACTIVE_HOURS`, `VALHEIM_ACTIVE_HOURS`, `PALWORLD_ACTIVE_HOURS` and `ENSHROUDED_ACTIVE_HOURS`
+in `.env` take `on` or `off`. Left blank, Icarus is on and the others are off, so they are only
+started and stopped by hand until you set, for example, `ENSHROUDED_ACTIVE_HOURS=on` and restart Compabot. A game is also skipped if its scripts folder is
 not on the PC. Each game is checked separately, so with both on, both are started at 6:00 AM and
 each is stopped at 8:00 PM only if nobody is on that game. Each post names its game, for example
 `**CompaWorld** (Icarus) was shut down at 8:00 PM because nobody was online.`

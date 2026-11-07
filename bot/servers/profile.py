@@ -29,7 +29,7 @@ class GameProfile:
     scripts: dict  # action -> script file name in scripts_dir
     process: str  # server process name, as a WMI LIKE pattern
     server_name: str  # used when config.psd1 has no ServerName
-    game_port: str
+    game_port: str  # the port players join on, shown by /server status
     query_port: int  # Steam query (A2S) port used to count players, unless the game has its own `ask`
     max_players: int
     steam_app_id: str  # the dedicated server's Steam app
@@ -44,6 +44,7 @@ class GameProfile:
     # answer; None if the game has no log to read.
     log_players: Optional[Callable]
     status_script: Path = STATUS_SCRIPT
+    port_key: str = 'GamePort'  # the config.psd1 setting that holds the port players join on
     features: frozenset = field(default_factory=frozenset)  # extras: mods, worlds, ores, settings
     # Hooks into the game's own folder for its extras; None when the game has none.
     mods: Optional[Callable] = None  # install root -> mod updater with update() and available()
