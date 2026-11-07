@@ -865,7 +865,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Players: 1/4 (Bjorn).', text)
 
     async def test_enshrouded_status_while_still_loading(self):
-        self.enshrouded_running(ENSHROUDED_LOG.split("[I 00:00:02,393]")[0])
+        self.enshrouded_running(ENSHROUDED_LOG.split("[I 00:00:01,156]")[0])
         interaction = self.interaction()
         await self.command('status').callback(interaction, 'enshrouded')
         self.assertIn('still loading', interaction.followup.send.call_args.args[0])
