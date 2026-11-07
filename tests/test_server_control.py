@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from Compabot import create_bot
-from bot.games import GAMES, ICARUS, PALWORLD, VALHEIM, relative
+from bot.games import ENSHROUDED, GAMES, ICARUS, PALWORLD, VALHEIM, relative
+from bot.games.enshrouded.players import enshrouded_players_online
 from bot.games.icarus.mods import ModError
 from bot.games.icarus.players import players_online
 from bot.games.palworld import api as palworld_api
@@ -36,6 +37,21 @@ VALHEIM_LOG = ('10/17/2026 12:00:00: Game server connected\n'
                '10/17/2026 12:28:56: Closing socket 76561198039777309\n'
                '10/17/2026 13:31:02: Got connection SteamID 76561197996718084\n'
                '10/17/2026 13:31:36: Got character ZDOID from Bjorn : 2666027640:1\n')
+# Trimmed from a real enshrouded_server.log (11/7/2026): the server comes up, Legiterately joins and
+# leaves, then Bjorn joins (his lines are copied from Legiterately's).
+ENSHROUDED_LOG = ("[I 00:00:01,152] [OnlineProviderSteam] finished transition from 'Uninitialized' to 'InGame' (current='InGame')!\n"
+                  "[I 00:00:01,156] [Session] 'HostOnline' (up)!\n"
+                  "[I 00:00:01,156] [Session] finished transition from 'Lobby' to 'Host_Online' (current='Host_Online')!\n"
+                  "[I 00:00:11,088] [server] Savegame deserialization took 945.83 ms\n"
+                  "[I 00:01:33,125] [online] Added peer 0(1) (steamid:76561198039777309)\n"
+                  "[I 00:01:38,730] [server] Machine '1': Player '0(0)' logged in\n"
+                  "[I 00:01:38,732] [server] Player 'Legiterately' logged in with Permissions:\n"
+                  "[I 00:01:38,732] \t - CanAccessInventories\n"
+                  "[I 00:02:13,731] [server] Remove Entity for Player 'Legiterately'\n"
+                  "[I 00:02:13,732] [server] Remove Player 'Legiterately'\n"
+                  "[I 00:02:13,803] [online] Removed peer 0(1)\n"
+                  "[I 00:05:38,730] [server] Machine '2': Player '0(0)' logged in\n"
+                  "[I 00:05:38,732] [server] Player 'Bjorn' logged in with Permissions:\n")
 SETTINGS = ('[/Script/Icarus.DedicatedServerSettings]\r\nMaxPlayers=2\r\nLoadProspect=\r\nCreateProspect=\r\n'
             'ResumeProspect=False\r\nLastProspectName=ZAWORLDOO\r\nSaveGameOnExit=True\r\n')
 
@@ -64,9 +80,9 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         (self.scripts / 'config.psd1').write_text(
             f"@{{\n    InstallRoot = '{root}'\n    ServerName = 'CompaWorld'\n    GamePort = 17777\n}}\n")
         self.runner = FakeRunner()
-        # Valheim and Palworld folders that don't exist, so the jobs never touch the real servers.
+        # Valheim, Palworld and Enshrouded folders that don't exist, so the jobs never touch the real servers.
         self.bot = create_bot(server_admins=[ADMIN], scripts_dir=self.scripts, valheim_scripts_dir=root / 'no-valheim',
-                              palworld_scripts_dir=root / 'no-palworld')
+                              palworld_scripts_dir=root / 'no-palworld', enshrouded_scripts_dir=root / 'no-enshrouded')
         self.bot.server.run = self.runner
         self.bot.server.windows = True
         self.bot.server.query = lambda port: None
@@ -649,6 +665,8 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.bot.servers['valheim'] = self.valheim
         self.palworld = ServerControl([ADMIN], self.scripts('palworld', PALWORLD), game=PALWORLD)
         self.bot.servers['palworld'] = self.palworld
+        self.enshrouded = ServerControl([ADMIN], self.scripts('enshrouded', ENSHROUDED), game=ENSHROUDED)
+        self.bot.servers['enshrouded'] = self.enshrouded
         for control in self.bot.servers.values():
             control.run = self.runner
             control.windows = True
@@ -684,7 +702,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
             if command.name == 'settings':  # a group, offering only the games with settings (see test_settings)
                 continue
             choices = command._params['game'].choices
-            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Valheim', 'valheim'), ('Palworld', 'palworld')], command.name)
+            self.assertEqual([(c.name, c.value) for c in choices], [('Icarus', 'icarus'), ('Valheim', 'valheim'), ('Palworld', 'palworld'), ('Enshrouded', 'enshrouded')], command.name)
             self.assertFalse(command._params['game'].required)
         self.bot.tree.get_command('server').to_dict(self.bot.tree)
 
@@ -701,7 +719,7 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_unknown_game_is_refused_before_anything_runs(self):
         interaction = self.interaction()
         await self.command('status').callback(interaction, 'minecraft')
-        self.assertIn('does not run a `minecraft` server. Games: Icarus, Valheim, Palworld.', interaction.response.send_message.call_args.args[0])
+        self.assertIn('does not run a `minecraft` server. Games: Icarus, Valheim, Palworld, Enshrouded.', interaction.response.send_message.call_args.args[0])
         self.assertTrue(interaction.response.send_message.call_args.kwargs['ephemeral'])
         self.assertEqual(self.runner.calls, [])
 
@@ -729,10 +747,11 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bot_runs_every_game(self):
         bot = create_bot()
-        self.assertEqual(list(bot.servers), ['icarus', 'valheim', 'palworld'])
+        self.assertEqual(list(bot.servers), ['icarus', 'valheim', 'palworld', 'enshrouded'])
         self.assertIs(bot.server, bot.servers['icarus'])
         self.assertEqual(bot.servers['valheim'].scripts_dir, Path(r'C:\ValheimServer\scripts'))
         self.assertEqual(bot.servers['palworld'].scripts_dir, Path(r'C:\PalworldServer\scripts'))
+        self.assertEqual(bot.servers['enshrouded'].scripts_dir, Path(r'C:\EnshroudedServer\scripts'))
         await bot.close()
 
     def palworld_running(self, info):
@@ -830,6 +849,43 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ran(), ['Get-ServerStatus.ps1', 'Stop-ValheimServer.ps1', 'Get-ServerStatus.ps1',
                                       'Start-ValheimServer.ps1', 'Get-ServerStatus.ps1'])
 
+    def enshrouded_running(self, log_text):
+        self.runner.result = (0, f'{{"running":true,"started":{int(time.time()) - 60}}}')
+        log_file = self.enshrouded.install_root / 'server' / 'logs' / 'enshrouded_server.log'
+        log_file.parent.mkdir(parents=True)
+        log_file.write_text(log_text)
+
+    async def test_enshrouded_status_reads_its_own_log(self):
+        self.enshrouded_running(ENSHROUDED_LOG)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'enshrouded')
+        self.assertEqual(self.runner.calls[0][1], {'GAME_ROOT': str(self.enshrouded.install_root), 'GAME_PROCESS': 'enshrouded_server%'})
+        text = interaction.followup.send.call_args.args[0]
+        self.assertIn('ready for players on port 15637', text)
+        self.assertIn('Players: 1/4 (Bjorn).', text)
+
+    async def test_enshrouded_status_while_still_loading(self):
+        self.enshrouded_running(ENSHROUDED_LOG.split("[I 00:00:01,156]")[0])
+        interaction = self.interaction()
+        await self.command('status').callback(interaction, 'enshrouded')
+        self.assertIn('still loading', interaction.followup.send.call_args.args[0])
+
+    async def test_enshrouded_stop_refused_with_players_on(self):
+        self.enshrouded_running(ENSHROUDED_LOG)
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction, False, 'enshrouded')
+        self.assertEqual(interaction.followup.send.call_args.args[0],
+                         'Bjorn is online on **Enshrouded server**, so I did not stop it. '
+                         'Use `/server stop force:True game:enshrouded` to stop it anyway.')
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1'])
+
+    async def test_enshrouded_runs_its_own_scripts(self):
+        self.runner.result = (0, '{"running":false}')
+        for name, args in (('backup', ()), ('update', ()), ('stop', (True,))):
+            await self.command(name).callback(self.interaction(), *args, 'enshrouded')
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1', 'Backup-EnshroudedServer.ps1', 'Update-EnshroudedServer.ps1',
+                                      'Stop-EnshroudedServer.ps1'])
+
 
 class ProfileTests(unittest.TestCase):
     def test_icarus_profile_keeps_the_old_defaults(self):
@@ -879,6 +935,25 @@ class ProfileTests(unittest.TestCase):
                          ('C:\\PalworldServer', 'CompaPalworld', '8211', 27016))
         self.assertEqual((control.config['AdminPassword'], control.config['RestApiPort']), ('admin-secret', '8212'))
 
+    def test_enshrouded_profile_defaults_and_config(self):
+        control = ServerControl([], Path(tempfile.gettempdir()) / 'no-such-scripts', game=ENSHROUDED)
+        self.assertEqual((control.name, control.port, control.query_port, control.max_players),
+                         ('Enshrouded server', '15637', 15637, 4))
+        self.assertIsNone(control.crashes_dir)
+        self.assertIsNone(control.mods)
+        self.assertIsNone(control.worlds)
+        with tempfile.TemporaryDirectory() as folder:
+            # The real config.psd1 on the server PC, with made-up passwords.
+            (Path(folder) / 'config.psd1').write_text(
+                "@{\n    InstallRoot = 'C:\\EnshroudedServer'\n    ServerName = 'CompaEnshrouded'\n"
+                "    Password = 'joinme'\n    AdminPassword = 'admin-secret'\n"
+                "    QueryPort = 15637      # UDP. Forward it.\n    GamePort = 15636       # UDP. Older builds used it.\n"
+                "    MaxPlayers = 4         # 1-16\n    StopTimeoutSeconds = 90\n    BackupRetentionDays = 14\n}\n")
+            control = ServerControl([], folder, game=ENSHROUDED)
+        # GamePort is an old port only the firewall keeps open; players join on the query port.
+        self.assertEqual((str(control.install_root), control.name, control.port, control.query_port, control.max_players),
+                         ('C:\\EnshroudedServer', 'CompaEnshrouded', '15637', 15637, 4))
+
     def test_relative_splits_backslashes(self):
         self.assertEqual(relative('root', r'data\Saved\Logs\Icarus.log'), Path('root', 'data', 'Saved', 'Logs', 'Icarus.log'))
 
@@ -899,6 +974,12 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(valheim_players_online(VALHEIM_LOG + died + joining),
                          {'76561197996718084': 'Bjorn', '76561198039777309': None})
         self.assertEqual(valheim_players_online(VALHEIM_LOG + '10/17/2026 13:39:47: Closing socket 76561197996718084\n'), {})
+
+    def test_enshrouded_players_online(self):
+        self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG), ['Bjorn'])
+        back = "[I 00:40:00,000] [server] Player 'Legiterately' logged in with Permissions:\n"
+        self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG + back + back), ['Bjorn', 'Legiterately'])
+        self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG + "[I 00:52:00,674] [Session] 'HostOnline' (down)!\n"), [])
 
     def test_palworld_players_from_the_rest_api(self):
         control = SimpleNamespace(max_players=4)

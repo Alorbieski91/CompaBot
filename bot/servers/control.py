@@ -63,7 +63,7 @@ class ServerControl:
         config = self.config = read_config(self.scripts_dir / 'config.psd1')
         self.install_root = Path(config.get('InstallRoot') or self.scripts_dir.parent)
         self.name = config.get('ServerName', game.server_name)
-        self.port = config.get('GamePort', game.game_port)
+        self.port = config.get(game.port_key, game.game_port)
         self.query_port = int(config.get('QueryPort', game.query_port))
         self.max_players = int(config.get('MaxPlayers', game.max_players))
         self.run = run
