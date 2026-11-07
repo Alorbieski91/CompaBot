@@ -37,14 +37,21 @@ VALHEIM_LOG = ('10/17/2026 12:00:00: Game server connected\n'
                '10/17/2026 12:28:56: Closing socket 76561198039777309\n'
                '10/17/2026 13:31:02: Got connection SteamID 76561197996718084\n'
                '10/17/2026 13:31:36: Got character ZDOID from Bjorn : 2666027640:1\n')
-# Trimmed from the first real enshrouded_server.log (11/7/2026); the player lines follow Enshrouded's log format.
-ENSHROUDED_LOG = ("[I 00:00:02,391] [OnlineProviderSteam] finished transition from 'Uninitialized' to 'InGame' (current='InGame')!\n"
-                  "[I 00:00:02,393] [Session] 'HostOnline' (up)!\n"
-                  "[I 00:00:02,393] [Session] finished transition from 'Lobby' to 'Host_Online' (current='Host_Online')!\n"
-                  "[I 00:00:11,028] [server] Savegame deserialization took 856.98 ms\n"
-                  "[I 00:05:10,100] [server] Player 'Shelob' logged in with Permissions:\n"
-                  "[I 00:06:20,200] [server] Player 'Bjorn' logged in with Permissions:\n"
-                  "[I 00:30:00,300] [server] Remove Entity for Player 'Shelob'\n")
+# Trimmed from a real enshrouded_server.log (11/7/2026): the server comes up, Legiterately joins and
+# leaves, then Bjorn joins (his lines are copied from Legiterately's).
+ENSHROUDED_LOG = ("[I 00:00:01,152] [OnlineProviderSteam] finished transition from 'Uninitialized' to 'InGame' (current='InGame')!\n"
+                  "[I 00:00:01,156] [Session] 'HostOnline' (up)!\n"
+                  "[I 00:00:01,156] [Session] finished transition from 'Lobby' to 'Host_Online' (current='Host_Online')!\n"
+                  "[I 00:00:11,088] [server] Savegame deserialization took 945.83 ms\n"
+                  "[I 00:01:33,125] [online] Added peer 0(1) (steamid:76561198039777309)\n"
+                  "[I 00:01:38,730] [server] Machine '1': Player '0(0)' logged in\n"
+                  "[I 00:01:38,732] [server] Player 'Legiterately' logged in with Permissions:\n"
+                  "[I 00:01:38,732] \t - CanAccessInventories\n"
+                  "[I 00:02:13,731] [server] Remove Entity for Player 'Legiterately'\n"
+                  "[I 00:02:13,732] [server] Remove Player 'Legiterately'\n"
+                  "[I 00:02:13,803] [online] Removed peer 0(1)\n"
+                  "[I 00:05:38,730] [server] Machine '2': Player '0(0)' logged in\n"
+                  "[I 00:05:38,732] [server] Player 'Bjorn' logged in with Permissions:\n")
 SETTINGS = ('[/Script/Icarus.DedicatedServerSettings]\r\nMaxPlayers=2\r\nLoadProspect=\r\nCreateProspect=\r\n'
             'ResumeProspect=False\r\nLastProspectName=ZAWORLDOO\r\nSaveGameOnExit=True\r\n')
 
@@ -970,8 +977,8 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
 
     def test_enshrouded_players_online(self):
         self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG), ['Bjorn'])
-        back = "[I 00:40:00,000] [server] Player 'Shelob' logged in with Permissions:\n"
-        self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG + back + back), ['Bjorn', 'Shelob'])
+        back = "[I 00:40:00,000] [server] Player 'Legiterately' logged in with Permissions:\n"
+        self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG + back + back), ['Bjorn', 'Legiterately'])
         self.assertEqual(enshrouded_players_online(ENSHROUDED_LOG + "[I 00:52:00,674] [Session] 'HostOnline' (down)!\n"), [])
 
     def test_palworld_players_from_the_rest_api(self):

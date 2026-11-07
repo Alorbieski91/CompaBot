@@ -3,7 +3,8 @@ import re
 
 from ...servers.steam_query import Info
 
-# Enshrouded logs a player by name when they finish joining, and again when their character is removed.
+# Enshrouded logs a player by name when they finish joining, and again when they leave. The
+# "[server] Machine '1': Player '0(0)' logged in" line before the join names a handle, not a player.
 JOINED = re.compile(r"\[server\] Player '(.+?)' logged in")
 LEFT = re.compile(r"\[server\] Remove Entity for Player '(.+?)'")
 # Every player is dropped when the session closes.
