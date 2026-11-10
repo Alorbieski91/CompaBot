@@ -1,4 +1,3 @@
-import asyncio
 import io
 import os
 import socket
@@ -87,10 +86,8 @@ class FakeControl:
     async def status(self):
         if not self.running:
             return {'running': False}
-        return {'running': True, 'started': self.started, 'players': Info(1, 2, ('Legiterately',))}
-
-    def listening(self, started):
-        return self.ready
+        return {'running': True, 'started': self.started, 'ready': self.ready,
+                'players': Info(1, 2, ('Legiterately',))}
 
     def slash(self, command):
         game = '' if self.game is ICARUS else f' game:{self.game.key}'

@@ -150,6 +150,17 @@ class AutoUpdateTests(unittest.IsolatedAsyncioTestCase):
         await self.updater.check()
         self.assertEqual(runner.ran, ['Stop-IcarusServer.ps1', 'Update-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
 
+    async def test_waits_when_nobody_can_say_who_is_on(self):
+        runner = self.use(running=True)  # no query answer and no server log
+        self.assertEqual(await self.updater.check(), WHILE_PLAYING)
+        self.assertEqual(await self.updater.check(), WHILE_PLAYING)
+        self.assertEqual(runner.ran, [])
+        self.assertEqual(len(self.messages), 1)
+        self.assertIn("I can't tell whether anyone is on the server", self.messages[0])
+        self.write_log('')
+        await self.updater.check()
+        self.assertEqual(runner.ran, ['Stop-IcarusServer.ps1', 'Update-IcarusServer.ps1', 'Start-IcarusServer.ps1'])
+
     async def test_names_everyone_still_on(self):
         self.write_log(JOIN.format(1, 'nscript') + JOIN.format(2, 'Legiterately'))
         self.use(running=True)
@@ -416,6 +427,12 @@ class PatchNotesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(lines[0], '- Bears now drop more leather')
         self.assertEqual(len(lines), 13)
         self.assertEqual(lines[-1], '- ...and 4 more in the notes.')
+
+    def test_ore_does_not_match_inside_other_words(self):
+        self.assertIsNone(patch_notes.GAMEPLAY.search('Updated menus before and after, and more'))
+        self.assertIsNone(patch_notes.SKIP_SECTION.search('Getting Started, restored'))
+        for line in ('Deep ore veins', 'More ores per node'):
+            self.assertIsNotNone(patch_notes.GAMEPLAY.search(line), line)
 
     def test_no_gameplay_changes(self):
         posts = [{'title': 'Hotfix 2.3.1', 'url': 'https://x', 'contents': '[list][*]Fixed a crash[/list]'}]

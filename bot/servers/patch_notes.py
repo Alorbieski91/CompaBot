@@ -23,7 +23,7 @@ UPDATE_TITLE = re.compile(r'\b(update|hotfix|patch)\b', re.I)
 BBCODE = re.compile(r'\[/?[a-z0-9*]+(?:=[^\]]*)?\]', re.I)
 # Sections of the notes that never change how we play.
 SKIP_SECTION = re.compile(r'fix|bug|known issue|performance|optimi[sz]|\bui\b|interface|audio|sound|'
-                          r'visual|art\b|localization|translation|store|dlc|workshop item', re.I)
+                          r'visual|\bart\b|localization|translation|\bstore\b|dlc|workshop item', re.I)
 SKIP_LINE = re.compile(r'^(fixed|fixes|fix|resolved|corrected)\b', re.I)
 CHANGE = re.compile(r'^(added|new|changed|reworked|increased|reduced|decreased|lowered|raised|removed|'
                     r'replaced|improved|adjusted|rebalanced|updated|buffed|nerfed|can now|now)\b', re.I)
@@ -31,7 +31,7 @@ CHANGE = re.compile(r'^(added|new|changed|reworked|increased|reduced|decreased|l
 GAMEPLAY = re.compile(r'egg|tam(e|ed|ing)|mount|pet\b|creature|animal|kiwi|wolf|bear|moa|buffalo|boar|'
                       r'deer|horse|breed|farm|crop|seed|plant|harvest|husbandry|feed|food|cook|recipe|'
                       r'craft|blueprint|tech ?tree|talent|workshop|item|tool|weapon|armou?r|deployable|'
-                      r'bench|ore|resource|yield|stamina|health|oxygen|water|hunger|temperature|weather|'
+                      r'bench|\bores?\b|resource|yield|stamina|health|oxygen|water|hunger|temperature|weather|'
                       r'storm|mission|prospect|outpost|biome|map|cave|loot|drop|spawn|damage|durability|save',
                       re.I)
 LIMIT = 12

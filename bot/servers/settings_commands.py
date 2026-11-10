@@ -128,12 +128,13 @@ def install(server, shared, controls):
             return f'{what} is waiting. {control.game.name} is busy right now; the change is written before it next starts.'
         players = state['players']
         if not restart:
-            who_on = f'{online(players)}, so I' if players.players else 'I'
+            who_on = f'{online(players)}, so I' if players.players and players.known else 'I'
             return (f'{what} is waiting. {name} is running and {who_on} did not restart it. It takes effect at the next start '
                     f"(or use `restart:True` to restart once nobody is on).{waiting_line(control, waiting, setting.key)}")
-        if players.players or control.busy:
+        if players.players or not players.known or control.busy:
             store.want_restart()
-            reason = online(players) if players.players else f'{LABELS[control.busy]} is running'
+            reason = ("I can't tell whether anyone is on because the server isn't answering" if not players.known
+                      else online(players) if players.players else f'{LABELS[control.busy]} is running')
             return f'{what} is waiting. {reason}, so I will restart {name} once nobody is on.'
         text = f'{what}. Nobody is on, so restarting {name} to apply it.\n'
         return text + await control.restart()

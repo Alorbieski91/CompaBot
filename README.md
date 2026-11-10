@@ -114,6 +114,13 @@ as the server going down.
 | `/server mods` | Update the mods only. The server must be stopped first. |
 | `/server ores world:NAME ore:NAME file:UPLOAD` | Post a map picture of the deep ore deposits and oil wells (`ore:Oil` for just the wells) in a saved world, with each deposit marked by an ore code (Ti, Pt, Au...) on the A1 (top left) to P16 (bottom right) grid, plus counts per ore. It also attaches the full list by grid square and the world's save, which can be dropped on the [ore map site](https://faysm.github.io/IcarusOreDeposit/) for a map you can filter and zoom. Compabot ships no map artwork: put a square top-down image named after the map (`Olympus.jpg`, `Elysium.png`, `Styx.webp`, `Prometheus.jpg`) in `data\maps` and the deposits are drawn over it; otherwise they are drawn on a plain grid. `world` defaults to the one the server loads; `ore` lists where just that ore is. Works while the server is running. `file:` reads a prospect .json uploaded from your own PC (`%LOCALAPPDATA%\Icarus\Saved\PlayerData\<Steam ID>\Prospects`) instead of a server world. |
 
+**Who counts as online.** Compabot asks the server's Steam query port (or Palworld's REST API) and
+also reads the server log. A count above zero is taken as it is; a zero is checked against the
+log, because a server can answer 0 while people are playing. If nothing answers and there is no
+log to read, the count is unknown, `/server status` says so, and everything that must not
+interrupt players (`/server stop` without `force:True`, `/server restart`, the schedule,
+auto-updates and a settings restart) leaves the server running.
+
 Backups only run while the server is off, because the running server keeps its save and log
 files open. `/server stop`, `/server start`, `/server update`, and the scheduled stops and restarts
 already back up with the server off. Every five minutes Compabot also checks whether the server
@@ -381,6 +388,7 @@ bot/
     control.py               runs a game's scripts; status, start, stop, restart, backups
     commands.py              the /server commands every game has
     Get-ServerStatus.ps1     tells control.py whether a server is running
+    processes.py             lists running processes, so a server that is off skips PowerShell
     monitor.py               down, crash and back-up alerts
     steam_query.py           player count from the Steam query port
     auto_update.py           scheduled game (and mod) updates

@@ -89,6 +89,11 @@ class ActiveHours:
             log.info('Scheduled stop: the %s server is already off', self.control.game.name)
             return None
         players = state['players']
+        if not players.known:
+            log.warning("Scheduled %s stop skipped: the server isn't answering, so nobody can say who is on",
+                        self.control.game.name)
+            return (f"{name} was due to shut down at {at}, but it isn't answering and I can't tell whether anyone is on, "
+                    f"so I left it running. If it is stuck, use {self.control.slash('stop force:True')}.")
         if players.players:
             log.info('Scheduled %s stop skipped: %s player(s) online', self.control.game.name, players.players)
             return None
@@ -108,6 +113,10 @@ class ActiveHours:
                 return f'{name} was due to start at {at}, but it did not come up.\n{problem}'
             return f'{name} was started at {at} for the day and is ready for players.{again if retried else ""}'
         players = state['players']
+        if not players.known:
+            log.warning("Scheduled %s restart skipped: the server isn't answering, so nobody can say who is on",
+                        self.control.game.name)
+            return None
         if players.players:
             log.info('Scheduled %s restart skipped: %s player(s) online', self.control.game.name, players.players)
             return None
