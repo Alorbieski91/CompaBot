@@ -164,7 +164,13 @@ class ModUpdater:
                 continue
             if (new_week, new_fix) > (week, fix):
                 target = self.mods_dir / latest.group(0)
-                self.download(pak_url, target)
+                try:
+                    self.download(pak_url, target)
+                except (ModError, OSError) as error:
+                    # One mod's failed download doesn't stop the others; the old file stays in place.
+                    log.warning('Mod update failed for %s: %s', name, error)
+                    lines.append(f'Mod update failed: {name}: {error}')
+                    continue
                 if target != path:
                     self.retire(path)
                 lines.append(f'{name}: updated w{week} v{fix} to w{new_week} v{new_fix} (old file kept in backups\\mods).')

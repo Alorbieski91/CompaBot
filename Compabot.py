@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from bot.features import install_features
 from bot.games import ENSHROUDED, GAMES, ICARUS, PALWORLD, VALHEIM
 from bot.servers.active_hours import ActiveHours, parse_time
-from bot.servers.auto_update import AutoUpdater
+from bot.servers.auto_update import FIRST_CHECK, STAGGER, AutoUpdater
 from bot.servers.commands import install_server_commands
 from bot.servers.control import DEFAULT_SCRIPTS_DIR, ServerControl, ServerError, fit
 from bot.servers.monitor import install_monitor
@@ -67,8 +67,8 @@ class CompaBot(commands.Bot):
             self.auto_backup.start()
             self.install_alerts()
         if self.server.windows:
-            for updater in self.install_updates():
-                self.update_tasks.append(asyncio.create_task(updater.run()))
+            for place, updater in enumerate(self.install_updates()):
+                self.update_tasks.append(asyncio.create_task(updater.run(FIRST_CHECK + place * STAGGER)))
         if self.server.windows:
             for schedule in self.install_schedules():
                 self.schedule_tasks.append(asyncio.create_task(schedule.run()))
@@ -288,4 +288,4 @@ if __name__ == '__main__':
                update_hours, int(raw_channel) if raw_channel else None,
                int(raw_alerts) if raw_alerts else None,
                (times['SERVER_START_TIME'], times['SERVER_STOP_TIME'], zone), valheim_scripts_dir,
-               scheduled_games, palworld_scripts_dir, enshrouded_scripts_dir).run(token)
+               scheduled_games, palworld_scripts_dir, enshrouded_scripts_dir).run(token, log_handler=None)

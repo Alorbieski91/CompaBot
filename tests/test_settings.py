@@ -367,6 +367,19 @@ class SettingsCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.file_value('ExpRate'), '2.000000')
         self.assertIn('Everyone left **CompaPalworld**, so I restarted it to apply `ExpRate`.', notes[0])
 
+    async def test_watch_does_not_restart_a_server_that_is_not_answering(self):
+        watch = SettingsWatch(self.control, AsyncMock())
+        self.store.add_pending('ExpRate', 2.0, 1.0, 'Andrew')
+        self.store.want_restart()
+        self.runner.running = True
+        self.players = None  # the REST API isn't answering, so nobody can say who is on
+        await watch.check()
+        self.assertEqual(self.runner.ran, [])
+        self.assertTrue(self.store.pending()['restart'])
+        text = await self.run_set('PalCaptureRate', '2', restart=True)
+        self.assertIn("I can't tell whether anyone is on because the server isn't answering, so I will restart", text)
+        self.assertEqual(self.runner.ran, [])
+
     async def test_other_games_have_no_settings(self):
         self.assertIsNone(self.bot.servers['icarus'].settings)
         self.assertIsNone(self.bot.servers['valheim'].settings)

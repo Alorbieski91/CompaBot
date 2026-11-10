@@ -11,6 +11,9 @@ class Info:
     players: int
     max_players: int
     names: tuple = ()  # Known only when read from the server log.
+    # False when nothing could say who is on (no answer and no log to read). The count is then
+    # a placeholder, and anything that must not interrupt players treats the server as occupied.
+    known: bool = True
 
 
 def query_info(port, host='127.0.0.1', timeout=2.0):

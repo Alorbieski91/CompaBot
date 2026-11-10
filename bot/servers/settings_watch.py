@@ -51,7 +51,7 @@ class SettingsWatch:
             return
         if applied and state.get('ready'):
             await self.confirm(applied)
-        if waiting['changes'] and waiting['restart'] and not state['players'].players:
+        if waiting['changes'] and waiting['restart'] and state['players'].known and not state['players'].players:
             store.want_restart(False)
             keys = ', '.join(f'`{key}`' for key in waiting['changes'])
             try:

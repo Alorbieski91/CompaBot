@@ -18,7 +18,8 @@ class FakeControl:
     game = ICARUS
     slash = ServerControl.slash
 
-    def __init__(self, running=False, players=0):
+    def __init__(self, running=False, players=0, known=True):
+        self.known = known
         self.name = 'CompaWorld'
         self.running = running
         self.players = players
@@ -36,7 +37,7 @@ class FakeControl:
     async def status(self):
         if not self.running:
             return {'running': False}
-        return {'running': True, 'started': 1000, 'players': Info(self.players, 2)}
+        return {'running': True, 'started': 1000, 'players': Info(self.players, 2, known=self.known)}
 
     async def run_action(self, action, window=None):
         if self.busy:
@@ -93,6 +94,18 @@ class ActiveHoursTests(unittest.IsolatedAsyncioTestCase):
         await hours.check()
         self.assertEqual(control.ran, [])
         self.assertEqual(self.posts, [])
+
+    async def test_a_server_that_is_not_answering_is_left_running(self):
+        control = FakeControl(running=True, known=False)  # nobody can say who is on
+        hours = self.make(control, at(2026, 10, 5, 20, 0))
+        await hours.check()
+        self.assertEqual(control.ran, [])
+        self.assertEqual(len(self.posts), 1)
+        self.assertIn("it isn't answering and I can't tell whether anyone is on, so I left it running", self.posts[0])
+        self.now = at(2026, 10, 6, 6, 0)
+        await hours.check()
+        self.assertEqual(control.ran, [])
+        self.assertEqual(len(self.posts), 1)
 
     async def test_morning_starts_a_stopped_server(self):
         control = FakeControl()

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from ..games import DEFAULT_GAME, ICARUS
+from .processes import process_names
 from .profile import ModError, ServerError, relative
 from .steam_query import Info, query_info
 
@@ -29,6 +30,7 @@ RUNNING_BACKUP = ("{name} is running, and its save files can't be backed up whil
                   '{stop} backs it up as soon as it has closed.')
 # Discord shows at most 25 autocomplete choices.
 MAX_CHOICES = 25
+UNSET = object()
 
 
 def read_config(path):
@@ -67,6 +69,10 @@ class ServerControl:
         self.query_port = int(config.get('QueryPort', game.query_port))
         self.max_players = int(config.get('MaxPlayers', game.max_players))
         self.run = run
+        # Lists the running processes without PowerShell, so a server that is plainly off costs
+        # nothing to check.
+        self.process_names = process_names
+        self.process_list_failed = False
         self.query = (lambda port: game.ask(self)) if game.ask else query_info
         self.windows = os.name == 'nt'
         self.busy = None
@@ -150,9 +156,8 @@ class ServerControl:
         if not force:
             self.check_free()
             state = await self.status()
-            if state['running'] and state['players'].players:
-                raise ServerError(f'{online(state["players"])} on **{self.name}**, so I did not stop it. '
-                                  f"Use {self.slash('stop force:True')} to stop it anyway.")
+            if state['running'] and (why := occupied(state['players'], f'**{self.name}**')):
+                raise ServerError(f"{why}, so I did not stop it. Use {self.slash('stop force:True')} to stop it anyway.")
         return await self.run_action('stop', window=window)
 
     async def restart(self, window=None):
@@ -167,8 +172,10 @@ class ServerControl:
         self.check_free()
         state = await self.status()
         self.check_free()  # another action may have started during the status check
-        if state['running'] and state['players'].players:
-            raise ServerError(f'{online(state["players"])} on {name}, so I did not restart it.')
+        if state['running'] and (why := occupied(state['players'], name)):
+            hint = '' if state['players'].known else (f" If it is stuck, use {self.slash('stop force:True')} "
+                                                      f"and then {self.slash('start')}.")
+            raise ServerError(f'{why}, so I did not restart it.{hint}')
         self.busy, self.holder = 'restart', asyncio.current_task()
         try:
             text, failed = '', f'{name} was stopped, but it did not come back up.'
@@ -214,7 +221,47 @@ class ServerControl:
         finally:
             self.busy = None
 
+    def plainly_off(self):
+        """True when no process with the server's name is running at all, so there is nothing to ask PowerShell.
+
+        Any doubt (not Windows, the list can't be read, a matching name) is False, and the status script decides.
+        """
+        lister = self.process_names
+        # The real list only goes with the real script runner: a test that scripts PowerShell's
+        # answers must not have them overruled by what happens to be running on this PC.
+        if not self.windows or lister is None or (lister is process_names and self.run is not run_process):
+            return False
+        try:
+            names = lister()
+        except Exception as error:  # never let the shortcut break a status check
+            if not self.process_list_failed:
+                self.process_list_failed = True
+                log.warning('Could not list processes (%r); every %s status check asks PowerShell instead',
+                            error, self.game.name)
+            return False
+        # The profile's name is a WMI LIKE pattern: % is any text, _ any one character.
+        pattern = re.compile(''.join('.*' if ch == '%' else '.' if ch == '_' else re.escape(ch)
+                                     for ch in self.game.process), re.I)
+        return bool(names) and not any(pattern.fullmatch(name) for name in names)
+
     async def status(self):
+        if await asyncio.to_thread(self.plainly_off):
+            state = {'running': False}
+        else:
+            state = await self.script_status()
+        if state['running']:
+            started = state['started']
+            # One read of the log and one question to the server serve both answers.
+            text = await asyncio.to_thread(self.read_log, started)
+            info = await asyncio.to_thread(self.query, self.query_port)
+            state['ready'] = self.listening(started, text, info)
+            state['players'] = await self.players(started, text, info)
+        backups = list((self.install_root / 'backups').glob(self.game.backup_glob))
+        state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
+        return state
+
+    async def script_status(self):
+        """Ask Get-ServerStatus.ps1 whether the server process is running, and since when."""
         code, out = await self.powershell('-File', str(self.game.status_script),
                                           env={'GAME_ROOT': str(self.install_root), 'GAME_PROCESS': self.game.process})
         if code != 0:
@@ -226,13 +273,7 @@ class ServerControl:
             state = json.loads(lines[-1])
         except (IndexError, ValueError):
             raise ServerError(f'Status check returned something unexpected:\n{tail(out)}') from None
-        if state['running']:
-            state['ready'] = await asyncio.to_thread(self.listening, state['started'])
-            state['players'] = await self.players(state['started'])
-        backups = list((self.install_root / 'backups').glob(self.game.backup_glob))
-        state['backup'] = int(max(p.stat().st_mtime for p in backups)) if backups else None
         return state
-
 
     async def wait_ready(self, timeout=READY_TIMEOUT, poll=READY_POLL):
         """After a start, wait for the server to accept players.
@@ -256,35 +297,57 @@ class ServerControl:
             if time.monotonic() >= deadline:
                 return 'loading'
 
-    def current_log(self, started):
-        """The server log text, or '' if it is missing or left over from an earlier run."""
+    def read_log(self, started):
+        """The server log text, or None if the game has none, or it is missing or left over from an earlier run."""
         if not self.game.log_file:
-            return ''
+            return None
         log_file = relative(self.install_root, self.game.log_file)
         try:
             if log_file.stat().st_mtime < started:
-                return ''
+                return None
             return log_file.read_bytes().decode('utf-8', 'replace')
         except OSError:
-            return ''
+            return None
 
-    async def players(self, started):
-        """Who is on: the count from the Steam query port (or the game's own API), else the names from the server log."""
-        info = await asyncio.to_thread(self.query, self.query_port)
-        if info:
+    def current_log(self, started):
+        """The server log text, or '' if it is missing or left over from an earlier run."""
+        return self.read_log(started) or ''
+
+    async def players(self, started, text=UNSET, info=UNSET):
+        """Who is on, from the Steam query port (or the game's own API) and the server log.
+
+        A count above zero from the query port is taken as it is. A zero is checked against the
+        log, because a server can answer the query with 0 while people are playing; the log's
+        names win when it has any. With no answer the log alone decides. When neither can say
+        (no answer and no log to read) the result has known=False, and callers that must not
+        interrupt players treat the server as occupied.
+
+        `text` and `info` are the log and the query answer when the caller already has them.
+        """
+        if info is UNSET:
+            info = await asyncio.to_thread(self.query, self.query_port)
+        if info and info.players:
             return info
-        if not self.game.log_players:
-            return Info(0, self.max_players)
-        return self.game.log_players(self.current_log(started), self.max_players)
+        if self.game.log_players:
+            if text is UNSET:
+                text = await asyncio.to_thread(self.read_log, started)
+            if text is not None:
+                seen = self.game.log_players(text, self.max_players)
+                if seen.players or not info:
+                    return seen
+        return info or Info(0, self.max_players, known=False)
 
-    def listening(self, started):
+    def listening(self, started, text=UNSET, info=UNSET):
         """Whether the current server log says the game port is accepting players.
 
-        A game without a ready line is ready once its own API answers.
+        A game without a ready line is ready once its own API answers. `text` and `info` are
+        the log and the query answer when the caller already has them.
         """
         if self.game.ready_line is None:
-            return self.query(self.query_port) is not None
-        return self.game.ready_line.format(port=self.port) in self.current_log(started)
+            return (self.query(self.query_port) if info is UNSET else info) is not None
+        if text is UNSET:
+            text = self.read_log(started)
+        return self.game.ready_line.format(port=self.port) in (text or '')
 
     @property
     def crashes_dir(self):
@@ -351,6 +414,18 @@ def online(players):
 
 
 
+def occupied(players, name):
+    """Why a server must be treated as having players on, or None when it is known to be empty.
+
+    'nscript is online on **CompaWorld**', or that nobody can tell who is on it.
+    """
+    if not players.known:
+        return f"I can't tell whether anyone is on {name} because it isn't answering"
+    if players.players:
+        return f'{online(players)} on {name}'
+    return None
+
+
 def tail(text, limit=1500):
     text = '\n'.join(line for line in text.splitlines()
                      if not line.startswith(('#< CLIXML', '<Objs '))).strip().replace('```', "'''")
@@ -384,7 +459,10 @@ def describe(control, state):
         lines.append(f"**{control.name}** is online since <t:{state['started']}:R> ({ready.format(control.port)}).")
         players = state['players']
         names = f" ({', '.join(players.names)})" if players.names else ''
-        lines.append(f'Players: {players.players}/{players.max_players}{names}.')
+        if players.known:
+            lines.append(f'Players: {players.players}/{players.max_players}{names}.')
+        else:
+            lines.append("Players: unknown (the server isn't answering).")
     if control.busy:
         lines.append(f'{LABELS[control.busy]} is running right now.')
     lines.append(f"Last backup: <t:{state['backup']}:R>." if state['backup'] else 'No backups found.')

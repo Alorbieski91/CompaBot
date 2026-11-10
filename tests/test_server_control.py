@@ -545,6 +545,74 @@ class ServerCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.command('status').callback(interaction)
         self.assertIn('Players: 2/2 (Legiterately, nscript).', self.sent(interaction))
 
+    async def test_log_is_checked_when_the_query_port_says_nobody_is_on(self):
+        # The query port can answer 0 while people are playing; the log's names win.
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        self.write_log('IpNetDriver listening on port 17777\n' + PLAYING, 1_790_000_100)
+        self.bot.server.query = lambda port: Info(0, 2)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction)
+        self.assertIn('Players: 2/2 (Legiterately, nscript).', self.sent(interaction))
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction)
+        self.assertIn('Legiterately and nscript are online on **CompaWorld**, so I did not stop it.', self.sent(interaction))
+        # Once the log shows them leaving, the query port's 0 stands.
+        self.write_log('IpNetDriver listening on port 17777\n' + PLAYING + LEFT, 1_790_000_100)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction)
+        self.assertIn('Players: 0/2.', self.sent(interaction))
+
+    async def test_query_port_count_above_zero_is_taken_as_it_is(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        self.write_log('IpNetDriver listening on port 17777\n' + PLAYING + LEFT, 1_790_000_100)
+        self.bot.server.query = lambda port: Info(1, 2)
+        interaction = self.interaction()
+        await self.command('status').callback(interaction)
+        self.assertIn('Players: 1/2.', self.sent(interaction))
+
+    async def test_no_answer_and_no_log_means_nobody_can_say_who_is_on(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        interaction = self.interaction()
+        await self.command('status').callback(interaction)
+        self.assertIn("Players: unknown (the server isn't answering).", self.sent(interaction))
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction)
+        self.assertIn("I can't tell whether anyone is on **CompaWorld** because it isn't answering, so I did not stop it.",
+                      self.sent(interaction))
+
+    async def test_status_reads_the_log_and_asks_the_server_once(self):
+        self.runner.result = (0, '{"running":true,"started":1790000000}')
+        self.write_log('IpNetDriver listening on port 17777\n' + PLAYING, 1_790_000_100)
+        asked, reads = [], []
+        self.bot.server.query = lambda port: asked.append(port)
+        read_log = self.bot.server.read_log
+        self.bot.server.read_log = lambda started: reads.append(started) or read_log(started)
+        state = await self.bot.server.status()
+        self.assertTrue(state['ready'])
+        self.assertEqual(state['players'].names, ('Legiterately', 'nscript'))
+        self.assertEqual((asked, reads), ([27015], [1790000000]))
+
+    async def test_a_server_that_is_plainly_off_skips_powershell(self):
+        control = self.bot.server
+        control.process_names = lambda: ['python.exe', 'explorer.exe']
+        self.assertEqual((await control.status())['running'], False)
+        self.assertEqual(self.runner.calls, [])
+        # A process with the server's name, or any trouble listing them, goes to the status script.
+        self.runner.result = (0, '{"running":false}')
+        for lister in (lambda: ['python.exe', 'icarusserver-win64-shipping.exe'], lambda: [], lambda: 1 / 0):
+            self.runner.calls.clear()
+            control.process_names = lister
+            self.assertEqual((await control.status())['running'], False)
+            self.assertEqual(len(self.runner.calls), 1)
+
+    async def test_like_pattern_underscore_matches_any_character(self):
+        control = self.bot.servers['valheim']
+        control.windows = True
+        control.process_names = lambda: ['valheim-server.exe']
+        self.assertFalse(control.plainly_off())
+        control.process_names = lambda: ['valheim.exe']
+        self.assertTrue(control.plainly_off())
+
     async def test_status_still_loading(self):
         self.runner.result = (0, '{"running":true,"started":1790000000}')
         for text, stamp in (('LogInit: starting\n', 1_790_000_100),  # current log, not listening yet
@@ -773,7 +841,23 @@ class GameOptionTests(unittest.IsolatedAsyncioTestCase):
         await self.command('status').callback(interaction, 'palworld')
         text = interaction.followup.send.call_args.args[0]
         self.assertIn('still loading', text)
-        self.assertIn('Players: 0/4.', text)
+        self.assertIn("Players: unknown (the server isn't answering).", text)
+
+    async def test_palworld_stop_refused_when_nobody_can_say_who_is_on(self):
+        self.palworld_running(None)  # running, but its REST API isn't answering and it has no log
+        interaction = self.interaction()
+        await self.command('stop').callback(interaction, False, 'palworld')
+        self.assertEqual(interaction.followup.send.call_args.args[0],
+                         "I can't tell whether anyone is on **Palworld server** because it isn't answering, "
+                         'so I did not stop it. Use `/server stop force:True game:palworld` to stop it anyway.')
+        self.assertEqual(self.ran(), ['Get-ServerStatus.ps1'])
+        interaction = self.interaction()
+        await self.command('restart').callback(interaction, 'palworld')
+        self.assertIn('so I did not restart it. If it is stuck, use `/server stop force:True game:palworld`',
+                      interaction.followup.send.call_args.args[0])
+        self.assertEqual(set(self.ran()), {'Get-ServerStatus.ps1'})
+        await self.command('stop').callback(self.interaction(), True, 'palworld')  # force still works
+        self.assertEqual(self.ran()[-1], 'Stop-PalworldServer.ps1')
 
     async def test_palworld_stop_refused_with_players_on(self):
         self.palworld_running(Info(2, 4, ('Bjorn', 'Shelob')))
@@ -1024,3 +1108,22 @@ class HelperTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProcessListTests(unittest.TestCase):
+    """The real process list only exists on Windows, where the watchdog runs these before a deploy."""
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows only')
+    def test_lists_this_process_or_gives_up_cleanly(self):
+        from bot.servers.processes import process_names
+        try:
+            names = process_names()
+        except OSError:
+            return  # the status script is used instead; never a wrong answer
+        self.assertTrue(any(name.lower().startswith('python') for name in names), names[:20])
+
+    @unittest.skipIf(os.name == 'nt', 'not on Windows')
+    def test_refuses_off_windows(self):
+        from bot.servers.processes import process_names
+        with self.assertRaises(OSError):
+            process_names()

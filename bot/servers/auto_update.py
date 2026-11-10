@@ -30,6 +30,8 @@ log = logging.getLogger('compabot.autoupdate')
 
 APP_ID = ICARUS.steam_app_id
 FIRST_CHECK = 60
+# Each game's first check starts this long after the previous game's, so they never run SteamCMD at once.
+STAGGER = 5 * 60
 WHILE_PLAYING = 15 * 60
 STEAMCMD_TIMEOUT = 5 * 60
 # Stop, update and start can each take a while; there is no Discord reply window to fit in here.
@@ -114,8 +116,8 @@ class AutoUpdater:
         await self.notify(patch_notes.describe(posts, build, self.control.game.name))
         self.save_state(build, posts[-1]['date'])
 
-    async def run(self):
-        await asyncio.sleep(FIRST_CHECK)
+    async def run(self, first=FIRST_CHECK):
+        await asyncio.sleep(first)
         while True:
             try:
                 delay = await self.check()
@@ -168,6 +170,14 @@ class AutoUpdater:
             state = await control.status()
             if state['running']:
                 players = state['players']
+                if not players.known:
+                    # Nothing can say who is on (the server isn't answering), so don't risk it.
+                    if self.announced != (key, 'unknown'):
+                        self.announced = (key, 'unknown')
+                        await self.notify(f"{what}. I can't tell whether anyone is on the server because it isn't "
+                                          f'answering, so I will install it once I can see that nobody is on. '
+                                          f"If it is stuck, use {control.slash('stop force:True')}.")
+                    return WHILE_PLAYING
                 if players.players:
                     if self.announced != key:
                         self.announced = key

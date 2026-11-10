@@ -91,8 +91,9 @@ class ModUpdaterTests(unittest.TestCase):
 
     def test_bad_download_keeps_installed_mod(self):
         self.install()
-        with self.assertRaisesRegex(ModError, 'did not download as a valid .pak'):
-            self.run_update(FakeWeb(pak=b'<html>Not Found</html>'))
+        lines = self.run_update(FakeWeb(pak=b'<html>Not Found</html>'))
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0], r'^Mod update failed: laanp-PetesBeaconTeleport: .*did not download as a valid \.pak')
         self.assertEqual([p.name for p in self.mods.iterdir()], ['laanp-PetesBeaconTeleport_v1_w251_P.pak'])
 
     def test_unknown_mods_and_empty_folder(self):
