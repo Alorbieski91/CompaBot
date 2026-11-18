@@ -19,19 +19,17 @@ def install(server, shared, controls):
     games = {key: control for key, control in controls.items() if control.game.supports('settings')}
     if not games:
         return
-    default = next(iter(games.values()))
     admins = shared.admins
     choices = [app_commands.Choice(name=control.game.name, value=key) for key, control in games.items()]
-    pick_game = f'Which game server. Leave empty for {default.game.name}.'
+    pick_game = 'Which game server. Pick it first: the setting list only shows that game\'s settings.'
     group = app_commands.Group(name='settings', description="Change a game server's settings (server admins only).")
 
     def chosen(interaction):
+        """The control for the game picked so far, so autocomplete only lists that game's settings."""
         game = getattr(getattr(interaction, 'namespace', None), 'game', None)
-        return games.get((game or default.game.key).lower())
+        return games.get(game.lower()) if game else None
 
     async def begin(interaction, game):
-        if game is None:
-            game = default.game.key
         control = await shared.begin(interaction, game)
         if control:
             try:
@@ -91,8 +89,7 @@ def install(server, shared, controls):
                            game=pick_game)
     @app_commands.autocomplete(setting=settings_autocomplete, value=value_autocomplete)
     @app_commands.choices(game=choices)
-    async def set_setting(interaction: discord.Interaction, setting: str, value: str, restart: bool = False,
-                          game: Optional[str] = None):
+    async def set_setting(interaction: discord.Interaction, game: str, setting: str, value: str, restart: bool = False):
         if not (control := await begin(interaction, game)):
             return
         try:
@@ -148,7 +145,7 @@ def install(server, shared, controls):
                            game=pick_game)
     @app_commands.autocomplete(setting=settings_autocomplete)
     @app_commands.choices(game=choices)
-    async def show_settings(interaction: discord.Interaction, setting: Optional[str] = None, game: Optional[str] = None):
+    async def show_settings(interaction: discord.Interaction, game: str, setting: Optional[str] = None):
         if not (control := await begin(interaction, game)):
             return
         try:
@@ -208,7 +205,7 @@ def install(server, shared, controls):
     @group.command(name='pending', description='List the setting changes waiting for the next start.')
     @app_commands.describe(game=pick_game)
     @app_commands.choices(game=choices)
-    async def pending(interaction: discord.Interaction, game: Optional[str] = None):
+    async def pending(interaction: discord.Interaction, game: str):
         if not (control := await begin(interaction, game)):
             return
         await interaction.followup.send(fit('\n'.join(pending_lines(control))))
@@ -217,7 +214,7 @@ def install(server, shared, controls):
     @app_commands.describe(setting='The waiting change to drop. Leave empty to drop them all.', game=pick_game)
     @app_commands.autocomplete(setting=settings_autocomplete)
     @app_commands.choices(game=choices)
-    async def cancel(interaction: discord.Interaction, setting: Optional[str] = None, game: Optional[str] = None):
+    async def cancel(interaction: discord.Interaction, game: str, setting: Optional[str] = None):
         if not (control := await begin(interaction, game)):
             return
         try:
@@ -232,14 +229,14 @@ def install(server, shared, controls):
     @group.command(name='undo', description='Put back the settings file from before the last change (server must be off).')
     @app_commands.describe(game=pick_game)
     @app_commands.choices(game=choices)
-    async def undo(interaction: discord.Interaction, game: Optional[str] = None):
+    async def undo(interaction: discord.Interaction, game: str):
         if not (control := await begin(interaction, game)):
             return
         try:
             control.check_free()
             if (await control.status())['running']:
                 raise ServerError(f"Stop **{control.name}** first: the settings file is only changed while it is off. "
-                                  f"To drop a change that is still waiting, use `/server settings cancel`.")
+                                  f"To drop a change that is still waiting, use `/server settings cancel game:{control.game.key}`.")
             name = await asyncio.to_thread(control.settings.undo, interaction.user.display_name)
             text = f'Put back the settings file from `{name}`. It takes effect when **{control.name}** starts.'
         except (ServerError, OSError) as error:
