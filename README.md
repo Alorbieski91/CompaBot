@@ -137,16 +137,17 @@ still running and lets it finish; use `/server status` to check on it.
 ### Palworld settings
 
 `/server settings` changes Palworld's gameplay settings in
-`server\Pal\Saved\Config\WindowsServer\PalWorldSettings.ini` (the `OptionSettings=(...)` line). Its
-`game:` option only offers games with settings, and leaving it empty means Palworld.
+`server\Pal\Saved\Config\WindowsServer\PalWorldSettings.ini` (the `OptionSettings=(...)` line). Every
+subcommand starts with a required `game:` option, which only offers games with settings (just Palworld
+for now). Pick it first: `setting:` then only lists that game's settings.
 
 | Command | Behavior |
 | --- | --- |
-| `/server settings set setting: value: restart:False` | Change one setting. `setting:` autocompletes with a plain-English label and the current value. `value:` offers True/False or the options, or hints and the allowed range for a number; anything outside the range is refused. |
-| `/server settings show setting:` | One setting's file value, default, range, any waiting change, and what the running server uses. Empty: every setting changed from its default, and what is waiting. |
-| `/server settings pending` | The changes waiting for the next start. |
-| `/server settings cancel setting:` | Drop one waiting change, or all of them. |
-| `/server settings undo` | Put back the settings file from before the last change. Only while the server is off. |
+| `/server settings set game: setting: value: restart:False` | Change one setting. `setting:` autocompletes with a plain-English label and the current value. `value:` offers True/False or the options, or hints and the allowed range for a number; anything outside the range is refused. |
+| `/server settings show game: setting:` | One setting's file value, default, range, any waiting change, and what the running server uses. Empty: every setting changed from its default, and what is waiting. |
+| `/server settings pending game:` | The changes waiting for the next start. |
+| `/server settings cancel game: setting:` | Drop one waiting change, or all of them. |
+| `/server settings undo game:` | Put back the settings file from before the last change. Only while the server is off. |
 
 Palworld only reads the file when it starts, and can write its own values back when it shuts down,
 so Compabot only writes the file while the server is off:

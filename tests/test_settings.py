@@ -209,13 +209,13 @@ class SettingsCommandTests(unittest.IsolatedAsyncioTestCase):
 
     def interaction(self, user=ADMIN, **options):
         return SimpleNamespace(user=SimpleNamespace(id=user, display_name='Andrew'),
-                               namespace=SimpleNamespace(game=None, **options),
+                               namespace=SimpleNamespace(**{'game': 'palworld', **options}),
                                response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
                                followup=SimpleNamespace(send=AsyncMock()))
 
     async def run_set(self, setting, value, restart=False):
         interaction = self.interaction()
-        await self.command('set').callback(interaction, setting, value, restart)
+        await self.command('set').callback(interaction, 'palworld', setting, value, restart)
         return interaction.followup.send.call_args.args[0]
 
     def file_value(self, key):
@@ -225,7 +225,11 @@ class SettingsCommandTests(unittest.IsolatedAsyncioTestCase):
         group = self.bot.tree.get_command('server').get_command('settings')
         self.assertEqual({c.name for c in group.commands}, {'set', 'show', 'pending', 'cancel', 'undo'})
         for command in group.commands:
-            self.assertEqual([c.value for c in command._params['game'].choices], ['palworld'])
+            game = command._params['game']
+            self.assertEqual([c.value for c in game.choices], ['palworld'])
+            # game comes first and is required, so the setting list can follow the game picked
+            self.assertTrue(game.required)
+            self.assertEqual(command.parameters[0].name, 'game')
         self.bot.tree.get_command('server').to_dict(self.bot.tree)
 
     async def test_stopped_server_gets_the_file_written_now(self):
@@ -274,7 +278,7 @@ class SettingsCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_admins_are_refused(self):
         interaction = self.interaction(user=99)
-        await self.command('set').callback(interaction, 'ExpRate', '2', False)
+        await self.command('set').callback(interaction, 'palworld', 'ExpRate', '2', False)
         self.assertIn('Only the server admins', interaction.response.send_message.call_args.args[0])
         autocomplete = self.command('set')._params['setting'].autocomplete
         self.assertEqual(await autocomplete(self.interaction(user=99), 'exp'), [])
@@ -289,17 +293,24 @@ class SettingsCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c.value for c in found], ['None', 'Item', 'ItemAndEquipment', 'All'])
         self.assertEqual(found[3].name, 'All (drop items, gear and team Pals, now)')
 
+    async def test_autocomplete_waits_for_a_game_with_settings(self):
+        settings = self.command('set')._params['setting'].autocomplete
+        self.assertEqual(await settings(self.interaction(game=None), 'exp'), [])
+        self.assertEqual(await settings(self.interaction(game='icarus'), 'exp'), [])
+        values = self.command('set')._params['value'].autocomplete
+        self.assertEqual(await values(self.interaction(game=None, setting='DeathPenalty'), ''), [])
+
     async def test_show_and_pending(self):
         self.store.write({'ExpRate': 2.0}, 'Andrew')
         self.store.add_pending('bIsPvP', True, False, 'nscript')
         interaction = self.interaction()
-        await self.command('show').callback(interaction)
+        await self.command('show').callback(interaction, 'palworld')
         text = interaction.followup.send.call_args.args[0]
         self.assertIn('`ExpRate` 2 (default 1)', text)
         self.assertIn('`DeathPenalty` All (default Item)', text)
         self.assertIn('`bIsPvP` False → True (set by nscript)', text)
         interaction = self.interaction()
-        await self.command('show').callback(interaction, 'bIsPvP')
+        await self.command('show').callback(interaction, 'palworld', 'bIsPvP')
         text = interaction.followup.send.call_args.args[0]
         self.assertIn('Waiting for the next start: True (set by nscript).', text)
 
@@ -307,10 +318,10 @@ class SettingsCommandTests(unittest.IsolatedAsyncioTestCase):
         self.store.write({'ExpRate': 2.0}, 'Andrew')
         self.runner.running = True
         interaction = self.interaction()
-        await self.command('undo').callback(interaction)
+        await self.command('undo').callback(interaction, 'palworld')
         self.assertIn('Stop **CompaPalworld** first', interaction.followup.send.call_args.args[0])
         self.runner.running = False
-        await self.command('undo').callback(self.interaction())
+        await self.command('undo').callback(self.interaction(), 'palworld')
         self.assertEqual(self.file_value('ExpRate'), '1.000000')
 
     async def test_any_start_writes_waiting_changes_first(self):
